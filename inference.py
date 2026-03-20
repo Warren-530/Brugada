@@ -51,6 +51,150 @@ DECISION_THRESHOLD = 0.050
 LOWER_BOUND = 0.040
 UPPER_BOUND = 0.060
 
+
+def _extract_stat_features(sig_2d: np.ndarray) -> list[float]:
+    stat_feat: list[float] = []
+    for lead in range(12):
+        sig = sig_2d[:, lead]
+        stat_feat.extend([
+            np.max(sig),
+            np.min(sig),
+            np.std(sig),
+            np.var(sig),
+            stats.skew(sig),
+            stats.kurtosis(sig),
+            np.sqrt(np.mean(sig**2)),
+        ])
+    return stat_feat
+
+
+def _merge_segments(segments: list[tuple[int, int]], merge_gap: int = 2) -> list[tuple[int, int]]:
+    if not segments:
+        return []
+    segments = sorted(segments, key=lambda x: x[0])
+    merged = [segments[0]]
+    for start, end in segments[1:]:
+        last_start, last_end = merged[-1]
+        if start <= last_end + merge_gap:
+            merged[-1] = (last_start, max(last_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _extract_expert_features_and_highlights(
+    sig_2d: np.ndarray,
+    fs: float,
+) -> tuple[list[float], dict[str, list[tuple[int, int]]], list[dict]]:
+    expert_feat: list[float] = []
+    highlights: dict[str, list[tuple[int, int]]] = {"V1": [], "V2": [], "V3": []}
+    evidence: list[dict] = []
+    v_leads = [6, 7, 8]
+    lead_names = ["V1", "V2", "V3"]
+
+    for l_idx, lead_name in zip(v_leads, lead_names):
+        sig = sig_2d[:, l_idx]
+        try:
+            _, rpeaks = nk.ecg_peaks(sig, sampling_rate=fs)
+            try:
+                _, waves = nk.ecg_delineate(sig, rpeaks, sampling_rate=fs, method="peak")
+                j_offsets = [int(x) for x in waves["ECG_R_Offsets"] if not np.isnan(x) and int(x) < len(sig)]
+            except Exception:
+                j_offsets = []
+
+            if j_offsets:
+                j_heights = [sig[j] for j in j_offsets]
+                avg_j_height = float(np.mean(j_heights))
+
+                v20, v40, v60, v80 = [], [], [], []
+                lead_segments: list[tuple[int, int]] = []
+                for j in j_offsets:
+                    if j + 8 < len(sig):
+                        v20.append(sig[j + 2])
+                        v40.append(sig[j + 4])
+                        v60.append(sig[j + 6])
+                        v80.append(sig[j + 8])
+                        lead_segments.append((max(0, j - 2), min(len(sig) - 1, j + 10)))
+
+                avg_slope = float((np.mean(v80) - avg_j_height) / 8) if v80 else 0.0
+                curvature = float((np.mean(v40) - np.mean(v20)) - (np.mean(v80) - np.mean(v60))) if v80 else 0.0
+
+                expert_feat.extend([avg_j_height, avg_slope, curvature])
+                highlights[lead_name] = _merge_segments(lead_segments)[:12]
+
+                # Heuristic evidence score for clinical explanation only (not used by classifier).
+                score = max(0.0, avg_j_height) + max(0.0, -avg_slope) + max(0.0, curvature)
+                evidence.append(
+                    {
+                        "lead": lead_name,
+                        "j_height": avg_j_height,
+                        "st_slope": avg_slope,
+                        "curvature": curvature,
+                        "segments": len(highlights[lead_name]),
+                        "source": "j_point",
+                        "score": float(score),
+                    }
+                )
+            else:
+                expert_feat.extend([0, 0, 0])
+                evidence.append(
+                    {
+                        "lead": lead_name,
+                        "j_height": 0.0,
+                        "st_slope": 0.0,
+                        "curvature": 0.0,
+                        "segments": 0,
+                        "source": "none",
+                        "score": 0.0,
+                    }
+                )
+        except Exception:
+            expert_feat.extend([0, 0, 0])
+            evidence.append(
+                {
+                    "lead": lead_name,
+                    "j_height": 0.0,
+                    "st_slope": 0.0,
+                    "curvature": 0.0,
+                    "segments": 0,
+                    "source": "none",
+                    "score": 0.0,
+                }
+            )
+
+    return expert_feat, highlights, evidence
+
+
+def extract_clinical_package(sig_2d: np.ndarray, fs: float) -> tuple[np.ndarray, dict[str, list[tuple[int, int]]], list[dict]]:
+    stat_feat = _extract_stat_features(sig_2d)
+    expert_feat, highlights, evidence = _extract_expert_features_and_highlights(sig_2d, fs)
+    return np.array(stat_feat + expert_feat), highlights, evidence
+
+
+def _build_explanation(probability: float, is_detected: bool, in_gray_zone: bool, evidence: list[dict]) -> str:
+    sorted_evidence = sorted(evidence, key=lambda x: x["score"], reverse=True)
+    top_leads = [e for e in sorted_evidence if e["segments"] > 0][:2]
+
+    if top_leads:
+        lead_summary = ", ".join(
+            [
+                f"{e['lead']} (J={e['j_height']:.3f}, slope={e['st_slope']:.4f}, curvature={e['curvature']:.4f})"
+                for e in top_leads
+            ]
+        )
+        morphology_note = f"Highlighted V1-V3 segments indicate morphology around J-point/ST regions, most notable in {lead_summary}."
+    else:
+        morphology_note = "No robust V1-V3 morphological segment was detected for explainable highlight."
+
+    if in_gray_zone:
+        triage_note = "Prediction is in the gray zone; cardiologist review is strongly recommended."
+    elif is_detected:
+        triage_note = "Model probability crosses the clinical decision threshold and is flagged as high-risk."
+    else:
+        triage_note = "Model probability is below the clinical decision threshold and is flagged as low-risk."
+
+    return f"Brugada risk probability={probability:.4f}. {triage_note} {morphology_note}"
+
 def load_all_models():
     """Load all .keras and .pkl files centrally"""
     if MODELS: return 
@@ -91,53 +235,8 @@ def load_all_models():
 # =============================================================================
 def extract_clinical_features(sig_2d: np.ndarray, fs: float) -> np.ndarray:
     """Extract exactly 84D statistical + 9D expert features (Total: 93D)"""
-    
-    # 1. Statistical View (84D)
-    stat_feat = []
-    for lead in range(12):
-        sig = sig_2d[:, lead]
-        stat_feat.extend([
-            np.max(sig), 
-            np.min(sig), 
-            np.std(sig), 
-            np.var(sig),
-            stats.skew(sig), 
-            stats.kurtosis(sig), 
-            np.sqrt(np.mean(sig**2)) # RMS
-        ])
-        
-    # 2. Expert Morphological View V1-V3 (9D)
-    expert_feat = []
-    v_leads = [6, 7, 8] # V1, V2, V3
-    for l_idx in v_leads:
-        sig = sig_2d[:, l_idx]
-        try:
-            _, rpeaks = nk.ecg_peaks(sig, sampling_rate=fs)
-            _, waves = nk.ecg_delineate(sig, rpeaks, sampling_rate=fs, method="peak")
-            j_offsets = [int(x) for x in waves['ECG_R_Offsets'] if not np.isnan(x)]
-
-            if j_offsets:
-                j_heights = [sig[j] for j in j_offsets]
-                avg_j_height = np.mean(j_heights)
-
-                v20, v40, v60, v80 = [], [], [], []
-                for j in j_offsets:
-                    if j + 8 < len(sig):
-                        v20.append(sig[j+2])
-                        v40.append(sig[j+4])
-                        v60.append(sig[j+6])
-                        v80.append(sig[j+8])
-
-                avg_slope = (np.mean(v80) - avg_j_height) / 8 if v80 else 0
-                curvature = (np.mean(v40) - np.mean(v20)) - (np.mean(v80) - np.mean(v60)) if v80 else 0
-
-                expert_feat.extend([avg_j_height, avg_slope, curvature])
-            else:
-                expert_feat.extend([0, 0, 0])
-        except Exception:
-            expert_feat.extend([0, 0, 0])
-            
-    return np.array(stat_feat + expert_feat)
+    clinical_feat, _, _ = extract_clinical_package(sig_2d, fs)
+    return clinical_feat
 
 def generate_cwt_scalograms(sig_2d: np.ndarray) -> np.ndarray:
     """Extract V1, V2, V3 wavelet features and resize to 128x128"""
@@ -199,8 +298,8 @@ def predict_from_record(record_path: str) -> dict:
     feat_cwt    = MODELS['cwt_feat'].predict(signal_2d, verbose=0)
     
     # 3. Clinical Handcrafted Features (Statistical + Expert)
-    feat_clinical = extract_clinical_features(base_signal, fs=fs)
-    feat_clinical = np.expand_dims(feat_clinical, axis=0)
+    clinical_feat, highlighted_segments, evidence = extract_clinical_package(base_signal, fs=fs)
+    feat_clinical = np.expand_dims(clinical_feat, axis=0)
     
     # 4. Strict Concatenation Order:
     # Stat(84) + Expert(9) -> ResNet(32) -> EEGNet(32) -> BiLSTM(32) -> CWT(32)
@@ -227,8 +326,16 @@ def predict_from_record(record_path: str) -> dict:
     
     # 6. Logical Decision (strictly aligned to notebook thresholding style)
     is_detected = brugada_proba >= DECISION_THRESHOLD
-    in_gray_zone = LOWER_BOUND <= brugada_proba <= UPPER_BOUND
-    confidence_percent = brugada_proba * 100.0
+    # Asymmetric gray-zone for low-threshold deployment:
+    # only flag borderline positives as gray-zone to avoid overwhelming low-risk normals.
+    in_gray_zone = DECISION_THRESHOLD <= brugada_proba <= UPPER_BOUND
+
+    # Class-conditional confidence for user-facing interpretation.
+    # If predicted positive -> confidence = P(Brugada)
+    # If predicted normal   -> confidence = P(Normal) = 1 - P(Brugada)
+    decision_confidence = float(brugada_proba if is_detected else (1.0 - brugada_proba))
+    confidence_percent = decision_confidence * 100.0
+    explanation = _build_explanation(brugada_proba, is_detected, in_gray_zone, evidence)
     
     return {
         "status": "success",
@@ -238,6 +345,10 @@ def predict_from_record(record_path: str) -> dict:
         "confidence": float(confidence_percent),
         "decision_threshold": float(DECISION_THRESHOLD),
         "gray_zone": bool(in_gray_zone),
+        "highlighted_segments": highlighted_segments,
+        "lead_names": ["I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"],
+        "explanation": explanation,
+        "clinical_evidence": evidence,
         "signal_for_plot": base_signal,
         "fs": fs
     }

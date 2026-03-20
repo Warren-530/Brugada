@@ -161,6 +161,8 @@ with right:
                 label = result.get("label", "Unknown")
                 confidence_percent = float(result.get("confidence", 0.0))
                 probability = float(result.get("probability", 0.0))
+                gray_zone = bool(result.get("gray_zone", False))
+                decision_threshold = float(result.get("decision_threshold", 0.05))
                 explanation = result.get(
                     "explanation",
                     "Model prediction generated. Clinical correlation is recommended.",
@@ -169,16 +171,20 @@ with right:
                 fs_plot = float(result.get("fs", 500.0))
                 lead_names = result.get("lead_names", DEFAULT_LEAD_NAMES)
                 highlights = result.get("highlighted_segments", {})
+                clinical_evidence = result.get("clinical_evidence", [])
                 feature_importance = result.get("feature_importance", {})
             else:
                 label = result.label
                 confidence_percent = float(result.confidence_percent)
                 probability = float(result.probability)
+                gray_zone = bool(getattr(result, "gray_zone", False))
+                decision_threshold = float(getattr(result, "decision_threshold", 0.05))
                 explanation = result.explanation
                 signal_plot = result.signal
                 fs_plot = float(result.fs)
                 lead_names = result.lead_names
                 highlights = result.highlighted_segments
+                clinical_evidence = getattr(result, "clinical_evidence", [])
                 feature_importance = result.feature_importance
 
             if label == "Brugada Syndrome Detected":
@@ -186,8 +192,21 @@ with right:
             else:
                 st.success(label)
 
-            st.metric("Probability Score", f"{confidence_percent:.1f}%")
+            if gray_zone:
+                st.warning("Gray-zone prediction: probability is close to the decision threshold and needs clinician review.")
+
+            st.metric("AI Decision Confidence", f"{confidence_percent:.1f}%")
+            st.metric("Brugada Risk Probability", f"{probability * 100.0:.2f}%")
             st.write(explanation)
+            st.caption(f"Raw probability: {probability:.4f} | Threshold: {decision_threshold:.4f}")
+
+            if clinical_evidence:
+                evidence_df = pd.DataFrame(clinical_evidence)
+                preferred_cols = ["lead", "j_height", "st_slope", "curvature", "segments"]
+                show_cols = [c for c in preferred_cols if c in evidence_df.columns]
+                if show_cols:
+                    st.caption("Clinical Evidence (V1-V3):")
+                    st.dataframe(evidence_df[show_cols], use_container_width=True)
 
             if feature_importance:
                 feat_df = pd.DataFrame(
