@@ -45,10 +45,11 @@ FEATURE_LAYER_BY_MODEL = {
     'cwt_cnn': 'cwt_feature',
 }
 
-# Deployment thresholds calibrated on aligned pipeline evaluation.
-DECISION_THRESHOLD = 0.40
-LOWER_BOUND = 0.35
-UPPER_BOUND = 0.45
+# Notebook-aligned deployment thresholds
+# Clinical safety override to preserve maximal recall in deployment.
+DECISION_THRESHOLD = 0.050
+LOWER_BOUND = 0.040
+UPPER_BOUND = 0.060
 
 def load_all_models():
     """Load all .keras and .pkl files centrally"""
