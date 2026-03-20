@@ -15,7 +15,7 @@ import neurokit2 as nk
 # =============================================================================
 # Leads Attention Mechanism (with serialization decorator)
 # =============================================================================
-@keras.saving.register_keras_serializable()
+@keras.utils.register_keras_serializable()
 class LeadSpatialAttention(Layer):
     def __init__(self, **kwargs):
         super(LeadSpatialAttention, self).__init__(**kwargs)
@@ -38,6 +38,13 @@ class LeadSpatialAttention(Layer):
 # =============================================================================
 MODELS = {}
 
+FEATURE_LAYER_BY_MODEL = {
+    'resnet': 'nature_resnet_feature',
+    'blstm': 'bilstm_feature',
+    'eegnet': 'eegnet_feature',
+    'cwt_cnn': 'cwt_feature',
+}
+
 def load_all_models():
     """Load all .keras and .pkl files centrally"""
     if MODELS: return 
@@ -49,6 +56,24 @@ def load_all_models():
     MODELS['blstm']   = keras.models.load_model('extractor_bilstm.keras', custom_objects=custom_objs)
     MODELS['eegnet']  = keras.models.load_model('extractor_eegnet.keras', custom_objects=custom_objs)
     MODELS['cwt_cnn'] = keras.models.load_model('extractor_cwt_cnn.keras', custom_objects=custom_objs)
+
+    # Build intermediate feature models (32-d embeddings) instead of final 1-d classifiers.
+    MODELS['resnet_feat'] = keras.Model(
+        inputs=MODELS['resnet'].input,
+        outputs=MODELS['resnet'].get_layer(FEATURE_LAYER_BY_MODEL['resnet']).output,
+    )
+    MODELS['blstm_feat'] = keras.Model(
+        inputs=MODELS['blstm'].input,
+        outputs=MODELS['blstm'].get_layer(FEATURE_LAYER_BY_MODEL['blstm']).output,
+    )
+    MODELS['eegnet_feat'] = keras.Model(
+        inputs=MODELS['eegnet'].input,
+        outputs=MODELS['eegnet'].get_layer(FEATURE_LAYER_BY_MODEL['eegnet']).output,
+    )
+    MODELS['cwt_feat'] = keras.Model(
+        inputs=MODELS['cwt_cnn'].input,
+        outputs=MODELS['cwt_cnn'].get_layer(FEATURE_LAYER_BY_MODEL['cwt_cnn']).output,
+    )
     
     MODELS['scaler']   = joblib.load('brugada_scaler.pkl')
     MODELS['selector'] = joblib.load('brugada_selector.pkl')
@@ -162,10 +187,10 @@ def predict_from_record(record_path: str) -> dict:
     signal_2d = generate_cwt_scalograms(base_signal).astype(np.float32)
     
     # 2. Multi-view Feature Extraction
-    feat_resnet = MODELS['resnet'].predict(signal_1d, verbose=0)
-    feat_eegnet = MODELS['eegnet'].predict(signal_1d, verbose=0)
-    feat_blstm  = MODELS['blstm'].predict(signal_1d, verbose=0)
-    feat_cwt    = MODELS['cwt_cnn'].predict(signal_2d, verbose=0)
+    feat_resnet = MODELS['resnet_feat'].predict(signal_1d, verbose=0)
+    feat_eegnet = MODELS['eegnet_feat'].predict(signal_1d, verbose=0)
+    feat_blstm  = MODELS['blstm_feat'].predict(signal_1d, verbose=0)
+    feat_cwt    = MODELS['cwt_feat'].predict(signal_2d, verbose=0)
     
     # 3. Clinical Handcrafted Features (Statistical + Expert)
     feat_clinical = extract_clinical_features(base_signal, fs=fs)
@@ -180,6 +205,12 @@ def predict_from_record(record_path: str) -> dict:
         feat_blstm, 
         feat_cwt
     ], axis=1) # Expected shape: (1, 221)
+
+    expected_n = getattr(MODELS['scaler'], 'n_features_in_', None)
+    if expected_n is not None and final_features.shape[1] != int(expected_n):
+        raise ValueError(
+            f"Feature dimension mismatch: got {final_features.shape[1]}, expected {int(expected_n)}"
+        )
     
     # 5. ML Dimensionality Reduction & Prediction
     scaled_features   = MODELS['scaler'].transform(final_features)

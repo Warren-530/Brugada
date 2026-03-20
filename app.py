@@ -8,7 +8,23 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from inference import DEFAULT_LEAD_NAMES, predict_batch_from_folder, predict_from_record
+from inference import predict_from_record
+
+
+DEFAULT_LEAD_NAMES = [
+    "I",
+    "II",
+    "III",
+    "aVR",
+    "aVL",
+    "aVF",
+    "V1",
+    "V2",
+    "V3",
+    "V4",
+    "V5",
+    "V6",
+]
 
 
 st.set_page_config(page_title="Brugada AI Assistant", page_icon="ECG", layout="wide")
@@ -73,6 +89,44 @@ def _save_batch_folder(uploaded_files: list) -> Path:
     return temp_dir
 
 
+def _predict_batch_from_folder(folder_path: Path) -> list[dict]:
+    results = []
+    for hea_file in sorted(folder_path.glob("*.hea")):
+        base = hea_file.with_suffix("")
+        dat_file = base.with_suffix(".dat")
+        if not dat_file.exists():
+            continue
+
+        try:
+            pred = predict_from_record(str(base))
+            if isinstance(pred, dict):
+                probability = float(pred.get("probability", 0.0))
+                label = pred.get("label", "Unknown")
+            else:
+                probability = float(getattr(pred, "probability", 0.0))
+                label = getattr(pred, "label", "Unknown")
+
+            results.append(
+                {
+                    "record": base.name,
+                    "label": label,
+                    "probability": probability,
+                    "risk": "High" if probability >= 0.5 else "Low",
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            results.append(
+                {
+                    "record": base.name,
+                    "label": "Inference Failed",
+                    "probability": 0.0,
+                    "risk": "Unknown",
+                    "error": str(exc),
+                }
+            )
+    return results
+
+
 left, right = st.columns([1, 2])
 
 with left:
@@ -101,27 +155,54 @@ with right:
                 record_base = _save_uploaded_pair(hea_upload, dat_upload)
                 result = predict_from_record(record_base)
 
-            if result.label == "Brugada Syndrome Detected":
-                st.error(result.label)
+            if isinstance(result, dict):
+                label = result.get("label", "Unknown")
+                confidence_percent = float(result.get("confidence", 0.0))
+                probability = float(result.get("probability", 0.0))
+                explanation = result.get(
+                    "explanation",
+                    "Model prediction generated. Clinical correlation is recommended.",
+                )
+                signal_plot = result.get("signal_for_plot")
+                fs_plot = float(result.get("fs", 500.0))
+                lead_names = result.get("lead_names", DEFAULT_LEAD_NAMES)
+                highlights = result.get("highlighted_segments", {})
+                feature_importance = result.get("feature_importance", {})
             else:
-                st.success(result.label)
+                label = result.label
+                confidence_percent = float(result.confidence_percent)
+                probability = float(result.probability)
+                explanation = result.explanation
+                signal_plot = result.signal
+                fs_plot = float(result.fs)
+                lead_names = result.lead_names
+                highlights = result.highlighted_segments
+                feature_importance = result.feature_importance
 
-            st.metric("Probability Score", f"{result.confidence_percent:.1f}%")
-            st.write(result.explanation)
+            if label == "Brugada Syndrome Detected":
+                st.error(label)
+            else:
+                st.success(label)
 
-            feat_df = pd.DataFrame(
-                {
-                    "Extractor": list(result.feature_importance.keys()),
-                    "Feature Count": list(result.feature_importance.values()),
-                }
-            ).sort_values("Feature Count", ascending=False)
-            st.bar_chart(feat_df.set_index("Extractor"))
+            st.metric("Probability Score", f"{confidence_percent:.1f}%")
+            st.write(explanation)
+
+            if feature_importance:
+                feat_df = pd.DataFrame(
+                    {
+                        "Extractor": list(feature_importance.keys()),
+                        "Feature Count": list(feature_importance.values()),
+                    }
+                ).sort_values("Feature Count", ascending=False)
+                st.bar_chart(feat_df.set_index("Extractor"))
+            else:
+                st.caption(f"Predicted Brugada probability: {probability:.3f}")
 
             ecg_fig = _plot_12_lead(
-                signal=result.signal,
-                lead_names=result.lead_names,
-                fs=result.fs,
-                highlights=result.highlighted_segments,
+                signal=signal_plot,
+                lead_names=lead_names,
+                fs=fs_plot,
+                highlights=highlights,
             )
             st.pyplot(ecg_fig, clear_figure=True)
         except Exception as exc:  # noqa: BLE001
@@ -133,7 +214,7 @@ with right:
         else:
             with st.spinner("Scoring all uploaded records..."):
                 batch_dir = _save_batch_folder(batch_uploads)
-                batch_results = predict_batch_from_folder(batch_dir)
+                batch_results = _predict_batch_from_folder(batch_dir)
 
             if not batch_results:
                 st.warning("No valid WFDB pairs found in batch uploads.")
