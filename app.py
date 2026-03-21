@@ -9,6 +9,7 @@ import pandas as pd
 import streamlit as st
 
 from inference import predict_from_record
+from chatbot import BrugadaChatbot
 
 
 DEFAULT_LEAD_NAMES = [
@@ -30,6 +31,25 @@ DEFAULT_LEAD_NAMES = [
 st.set_page_config(page_title="Brugada AI Assistant", page_icon="ECG", layout="wide")
 st.title("Brugada Syndrome Clinical AI Assistant")
 st.caption("Multi-view deep feature stacking + meta-learner for single-patient ECG triage")
+
+# =============================================================================
+# Chatbot & Session State Initialization
+# =============================================================================
+if "chatbot" not in st.session_state:
+    try:
+        # Chatbot will automatically look for st.secrets["GEMINI_API_KEY"]
+        st.session_state.chatbot = BrugadaChatbot()
+        st.session_state.chatbot_ready = True
+    except Exception as e:
+        st.session_state.chatbot_ready = False
+        st.session_state.chatbot_error = str(e)
+
+if "last_ml_result" not in st.session_state:
+    st.session_state.last_ml_result = None
+
+# Store conversation history (persists across reruns)
+if "conversation_history" not in st.session_state:
+    st.session_state.conversation_history = []
 
 
 @st.cache_data(show_spinner=False)
@@ -266,172 +286,264 @@ with left:
 with right:
     st.subheader("Clinical Report")
 
+    # Check if we should run diagnosis
+    should_run_diagnosis = run_btn and hea_upload is not None and dat_upload is not None
+    has_results = st.session_state.last_ml_result is not None
+    
     if run_btn and (hea_upload is None or dat_upload is None):
         st.error("Please upload both .hea and .dat files before running diagnosis.")
-    elif run_btn:
+    
+    # Run diagnosis if button was clicked with valid files
+    if should_run_diagnosis:
         try:
             with st.spinner("Running inference pipeline..."):
                 record_base = _save_uploaded_pair(hea_upload, dat_upload)
                 result = predict_from_record(record_base)
+                st.session_state.last_ml_result = result
+                # Reset chat for a new record
+                if st.session_state.chatbot_ready:
+                    st.session_state.chatbot.reset_conversation()
+                    st.session_state.conversation_history = []  # Clear conversation history for new diagnosis
 
-            if isinstance(result, dict):
-                label = result.get("label", "Unknown")
-                confidence_percent = float(result.get("confidence", 0.0))
-                stability_percent = float(result.get("decision_stability", 0.0))
-                class_support_percent = float(result.get("class_support", 0.0))
-                probability = float(result.get("probability", 0.0))
-                gray_zone = bool(result.get("gray_zone", False))
-                decision_threshold = float(result.get("decision_threshold", 0.05))
-                clinician_explain = _normalize_clinician_explain(result.get("clinician_explain", {}))
-                model_contributions = result.get("model_contributions", {}) or {}
-                explanation = result.get(
-                    "explanation",
-                    "Model prediction generated. Clinical correlation is recommended.",
-                )
-                signal_plot = result.get("signal_for_plot")
-                fs_plot = float(result.get("fs", 500.0))
-                lead_names = result.get("lead_names", DEFAULT_LEAD_NAMES)
-                highlights = result.get("highlighted_segments", {})
-                clinical_evidence = result.get("clinical_evidence", [])
-            else:
-                label = result.label
-                confidence_percent = float(result.confidence_percent)
-                stability_percent = float(getattr(result, "decision_stability", 0.0))
-                class_support_percent = float(getattr(result, "class_support", 0.0))
-                probability = float(result.probability)
-                gray_zone = bool(getattr(result, "gray_zone", False))
-                decision_threshold = float(getattr(result, "decision_threshold", 0.05))
-                clinician_explain = _normalize_clinician_explain(getattr(result, "clinician_explain", {}))
-                model_contributions = getattr(result, "model_contributions", {}) or {}
-                explanation = result.explanation
-                signal_plot = result.signal
-                fs_plot = float(result.fs)
-                lead_names = result.lead_names
-                highlights = result.highlighted_segments
-                clinical_evidence = getattr(result, "clinical_evidence", [])
-
-            if not isinstance(clinical_evidence, list):
-                clinical_evidence = []
-            clinical_evidence = [item for item in clinical_evidence if isinstance(item, dict)]
-
-            rec_tier = str(clinician_explain.get("recommendation_tier", "routine_clinical_correlation"))
-            rec_text = str(clinician_explain.get("recommendation_text", "Clinical correlation is recommended."))
-            evidence_counts = clinician_explain.get("evidence_counts", {})
-            next_actions = clinician_explain.get("next_actions", []) if isinstance(clinician_explain.get("next_actions", []), list) else []
-            mismatch = bool(clinician_explain.get("morphology_model_mismatch", False))
-
-            if label == "Brugada Syndrome Detected":
-                st.error(label)
-            else:
-                st.success(label)
-
-            if gray_zone:
-                st.warning("Gray-zone prediction: probability is close to the decision threshold and needs clinician review.")
-                st.caption(f"Borderline-positive zone policy: [{decision_threshold:.3f}, {decision_threshold + 0.01:.3f}].")
-
-            if mismatch:
-                st.warning("Discordant case: model decision and V1-V3 morphology strength are not strongly aligned. Prioritize manual review.")
-
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Decision Confidence (derived)", f"{confidence_percent:.1f}%")
-            m2.metric("Threshold Distance", f"{stability_percent:.2f} pp")
-            m3.metric("Predicted-Class Support", f"{class_support_percent:.1f}%")
-            m4.metric("Brugada Risk Probability", f"{probability * 100.0:.2f}%")
-            st.caption("Decision Confidence (derived): monotonic transform of threshold distance for easier quick reading.")
-            st.caption("Threshold Distance: absolute distance from threshold in percentage points; lower means more borderline.")
-            st.caption("Predicted-Class Support: posterior support for the assigned label (can differ from risk probability under low-threshold policy).")
-            st.info("Interpretation: prioritize Brugada Risk Probability for risk level and Threshold Distance for borderline assessment; Decision Confidence is the same boundary information in a normalized view.")
-            st.write(explanation or "No explanation text returned by model. Please review metrics and clinical evidence.")
-            st.caption(f"Raw probability: {probability:.4f} | Threshold: {decision_threshold:.4f}")
-            st.caption("Red ECG overlays are shown for Brugada-detected or gray-zone cases.")
-
-            margin_fig = _plot_decision_margin(probability=probability, threshold=decision_threshold)
-            st.pyplot(margin_fig, clear_figure=True)
-
-            _recommendation_banner(rec_tier, rec_text)
-
-            if gray_zone or stability_percent <= 1.0:
-                st.warning("Borderline Interpretation Protocol")
-                st.caption(
-                    "This record is close to the decision threshold. Use a conservative review workflow before final clinical action."
-                )
-                st.write("- Repeat ECG acquisition and verify V1-V3 lead placement.")
-                st.write("- Prioritize manual cardiologist over-read for morphology confirmation.")
-                st.write("- Correlate with symptoms, syncope history, and family history.")
-                st.write("- If uncertainty remains, escalate to urgent specialist review pathway.")
-
-            if clinical_evidence:
-                evidence_df = pd.DataFrame(clinical_evidence)
-                preferred_cols = ["lead", "source", "tier", "reliability", "j_height", "st_slope", "curvature", "score", "segments"]
-                show_cols = [c for c in preferred_cols if c in evidence_df.columns]
-                if show_cols:
-                    st.caption("Clinical Evidence (V1-V3):")
-                    display_df = evidence_df[show_cols].rename(
-                        columns={
-                            "tier": "evidence_strength",
-                            "reliability": "extraction_reliability",
-                        }
-                    )
-                    st.dataframe(display_df, use_container_width=True)
-
-                tier_cols = st.columns(3)
-                for idx, lead in enumerate(["V1", "V2", "V3"]):
-                    lead_row = evidence_df[evidence_df["lead"] == lead]
-                    if lead_row.empty:
-                        tier_text = "weak"
-                        rel_text = "poor"
-                    else:
-                        tier_text = str(lead_row.iloc[0].get("tier", "weak"))
-                        rel_text = str(lead_row.iloc[0].get("reliability", "poor"))
-                    tier_cols[idx].markdown(f"**{lead} Evidence Strength**")
-                    tier_cols[idx].markdown(f"### {tier_text.title()}")
-                    tier_cols[idx].caption(f"Extraction Reliability: {rel_text.title()}")
-
-                heatmap_fig = _plot_evidence_heatmap(evidence_df)
-                st.pyplot(heatmap_fig, clear_figure=True)
-                st.caption("Evidence Strength legend: strong=clear morphology support, moderate=partial support, weak=limited support.")
-                st.caption("Extraction Reliability legend: good=delineation robust, fair=usable but less robust, poor=insufficient delineation.")
-
-            if model_contributions and sum(float(v) for v in model_contributions.values()) > 0:
-                st.caption("Deep-view contribution share (embedding norm %):")
-                contrib_df = pd.DataFrame(
-                    {
-                        "model": list(model_contributions.keys()),
-                        "share": list(model_contributions.values()),
-                    }
-                ).sort_values("share", ascending=False)
-                st.bar_chart(contrib_df.set_index("model"))
-
-            st.subheader("Recommended Clinical Actions")
-            st.caption("Action checklist")
-            st.caption(
-                f"Tier: {rec_tier} | Evidence S/M/W: "
-                f"{_safe_int(evidence_counts.get('strong', 0))}/"
-                f"{_safe_int(evidence_counts.get('moderate', 0))}/"
-                f"{_safe_int(evidence_counts.get('weak', 0))}"
-            )
-            for action in next_actions:
-                if isinstance(action, str) and action.strip():
-                    st.write(f"- {action}")
-            st.caption("Clinical note: AI output supports triage and does not replace physician diagnosis.")
-
-            evidence_segments = sum(_safe_int(item.get("segments", 0)) for item in clinical_evidence)
-            if probability >= decision_threshold and evidence_segments == 0:
-                st.warning("High-risk prediction with no V1-V3 morphological evidence. Manual cardiology review is recommended.")
-
-            st.caption(f"Predicted Brugada probability: {probability:.3f}")
-
-            plot_highlights = highlights if (label == "Brugada Syndrome Detected" or gray_zone) else {}
-
-            ecg_fig = _plot_12_lead(
-                signal=signal_plot,
-                lead_names=lead_names,
-                fs=fs_plot,
-                highlights=plot_highlights,
-            )
-            st.pyplot(ecg_fig, clear_figure=True)
+            has_results = True
         except Exception as exc:  # noqa: BLE001
             st.exception(exc)
+            has_results = False
+    
+    # Display report if we have results (either from current run or from session state after rerun)
+    if has_results:
+        result = st.session_state.last_ml_result
+        if isinstance(result, dict):
+            label = result.get("label", "Unknown")
+            confidence_percent = float(result.get("confidence", 0.0))
+            stability_percent = float(result.get("decision_stability", 0.0))
+            class_support_percent = float(result.get("class_support", 0.0))
+            probability = float(result.get("probability", 0.0))
+            gray_zone = bool(result.get("gray_zone", False))
+            decision_threshold = float(result.get("decision_threshold", 0.05))
+            clinician_explain = _normalize_clinician_explain(result.get("clinician_explain", {}))
+            model_contributions = result.get("model_contributions", {}) or {}
+            explanation = result.get(
+                "explanation",
+                "Model prediction generated. Clinical correlation is recommended.",
+            )
+            signal_plot = result.get("signal_for_plot")
+            fs_plot = float(result.get("fs", 500.0))
+            lead_names = result.get("lead_names", DEFAULT_LEAD_NAMES)
+            highlights = result.get("highlighted_segments", {})
+            clinical_evidence = result.get("clinical_evidence", [])
+        else:
+            label = result.label
+            confidence_percent = float(result.confidence_percent)
+            stability_percent = float(getattr(result, "decision_stability", 0.0))
+            class_support_percent = float(getattr(result, "class_support", 0.0))
+            probability = float(result.probability)
+            gray_zone = bool(getattr(result, "gray_zone", False))
+            decision_threshold = float(getattr(result, "decision_threshold", 0.05))
+            clinician_explain = _normalize_clinician_explain(getattr(result, "clinician_explain", {}))
+            model_contributions = getattr(result, "model_contributions", {}) or {}
+            explanation = result.explanation
+            signal_plot = result.signal
+            fs_plot = float(result.fs)
+            lead_names = result.lead_names
+            highlights = result.highlighted_segments
+            clinical_evidence = getattr(result, "clinical_evidence", [])
+
+        if not isinstance(clinical_evidence, list):
+            clinical_evidence = []
+        clinical_evidence = [item for item in clinical_evidence if isinstance(item, dict)]
+
+        rec_tier = str(clinician_explain.get("recommendation_tier", "routine_clinical_correlation"))
+        rec_text = str(clinician_explain.get("recommendation_text", "Clinical correlation is recommended."))
+        evidence_counts = clinician_explain.get("evidence_counts", {})
+        next_actions = clinician_explain.get("next_actions", []) if isinstance(clinician_explain.get("next_actions", []), list) else []
+        mismatch = bool(clinician_explain.get("morphology_model_mismatch", False))
+
+        if label == "Brugada Syndrome Detected":
+            st.error(label)
+        else:
+            st.success(label)
+
+        if gray_zone:
+            st.warning("Gray-zone prediction: probability is close to the decision threshold and needs clinician review.")
+            st.caption(f"Borderline-positive zone policy: [{decision_threshold:.3f}, {decision_threshold + 0.01:.3f}].")
+
+        if mismatch:
+            st.warning("Discordant case: model decision and V1-V3 morphology strength are not strongly aligned. Prioritize manual review.")
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Decision Confidence (derived)", f"{confidence_percent:.1f}%")
+        m2.metric("Threshold Distance", f"{stability_percent:.2f} pp")
+        m3.metric("Predicted-Class Support", f"{class_support_percent:.1f}%")
+        m4.metric("Brugada Risk Probability", f"{probability * 100.0:.2f}%")
+        st.caption("Decision Confidence (derived): monotonic transform of threshold distance for easier quick reading.")
+        st.caption("Threshold Distance: absolute distance from threshold in percentage points; lower means more borderline.")
+        st.caption("Predicted-Class Support: posterior support for the assigned label (can differ from risk probability under low-threshold policy).")
+        st.info("Interpretation: prioritize Brugada Risk Probability for risk level and Threshold Distance for borderline assessment; Decision Confidence is the same boundary information in a normalized view.")
+        st.write(explanation or "No explanation text returned by model. Please review metrics and clinical evidence.")
+        st.caption(f"Raw probability: {probability:.4f} | Threshold: {decision_threshold:.4f}")
+        st.caption("Red ECG overlays are shown for Brugada-detected or gray-zone cases.")
+
+        margin_fig = _plot_decision_margin(probability=probability, threshold=decision_threshold)
+        st.pyplot(margin_fig, clear_figure=True)
+
+        _recommendation_banner(rec_tier, rec_text)
+
+        if gray_zone or stability_percent <= 1.0:
+            st.warning("Borderline Interpretation Protocol")
+            st.caption(
+                "This record is close to the decision threshold. Use a conservative review workflow before final clinical action."
+            )
+            st.write("- Repeat ECG acquisition and verify V1-V3 lead placement.")
+            st.write("- Prioritize manual cardiologist over-read for morphology confirmation.")
+            st.write("- Correlate with symptoms, syncope history, and family history.")
+            st.write("- If uncertainty remains, escalate to urgent specialist review pathway.")
+
+        if clinical_evidence:
+            evidence_df = pd.DataFrame(clinical_evidence)
+            preferred_cols = ["lead", "source", "tier", "reliability", "j_height", "st_slope", "curvature", "score", "segments"]
+            show_cols = [c for c in preferred_cols if c in evidence_df.columns]
+            if show_cols:
+                st.caption("Clinical Evidence (V1-V3):")
+                display_df = evidence_df[show_cols].rename(
+                    columns={
+                        "tier": "evidence_strength",
+                        "reliability": "extraction_reliability",
+                    }
+                )
+                st.dataframe(display_df, use_container_width=True)
+
+            tier_cols = st.columns(3)
+            for idx, lead in enumerate(["V1", "V2", "V3"]):
+                lead_row = evidence_df[evidence_df["lead"] == lead]
+                if lead_row.empty:
+                    tier_text = "weak"
+                    rel_text = "poor"
+                else:
+                    tier_text = str(lead_row.iloc[0].get("tier", "weak"))
+                    rel_text = str(lead_row.iloc[0].get("reliability", "poor"))
+                tier_cols[idx].markdown(f"**{lead} Evidence Strength**")
+                tier_cols[idx].markdown(f"### {tier_text.title()}")
+                tier_cols[idx].caption(f"Extraction Reliability: {rel_text.title()}")
+
+            heatmap_fig = _plot_evidence_heatmap(evidence_df)
+            st.pyplot(heatmap_fig, clear_figure=True)
+            st.caption("Evidence Strength legend: strong=clear morphology support, moderate=partial support, weak=limited support.")
+            st.caption("Extraction Reliability legend: good=delineation robust, fair=usable but less robust, poor=insufficient delineation.")
+
+        if model_contributions and sum(float(v) for v in model_contributions.values()) > 0:
+            st.caption("Deep-view contribution share (embedding norm %):")
+            contrib_df = pd.DataFrame(
+                {
+                    "model": list(model_contributions.keys()),
+                    "share": list(model_contributions.values()),
+                }
+            ).sort_values("share", ascending=False)
+            st.bar_chart(contrib_df.set_index("model"))
+
+        st.subheader("Recommended Clinical Actions")
+        st.caption("Action checklist")
+        st.caption(
+            f"Tier: {rec_tier} | Evidence S/M/W: "
+            f"{_safe_int(evidence_counts.get('strong', 0))}/"
+            f"{_safe_int(evidence_counts.get('moderate', 0))}/"
+            f"{_safe_int(evidence_counts.get('weak', 0))}"
+        )
+        for action in next_actions:
+            if isinstance(action, str) and action.strip():
+                st.write(f"- {action}")
+        st.caption("Clinical note: AI output supports triage and does not replace physician diagnosis.")
+
+        evidence_segments = sum(_safe_int(item.get("segments", 0)) for item in clinical_evidence)
+        if probability >= decision_threshold and evidence_segments == 0:
+            st.warning("High-risk prediction with no V1-V3 morphological evidence. Manual cardiology review is recommended.")
+
+        st.caption(f"Predicted Brugada probability: {probability:.3f}")
+
+        plot_highlights = highlights if (label == "Brugada Syndrome Detected" or gray_zone) else {}
+
+        ecg_fig = _plot_12_lead(
+            signal=signal_plot,
+            lead_names=lead_names,
+            fs=fs_plot,
+            highlights=plot_highlights,
+        )
+        st.pyplot(ecg_fig, clear_figure=True)
+
+        # =============================================================================
+        # AI Chatbot Interface
+        # =============================================================================
+        # AI Chatbot Interface
+        # =============================================================================
+        st.markdown("---")
+        st.subheader("💬 AI Clinical Advisor")
+        st.caption("Ask questions about the diagnosis and get evidence-based clinical guidance (powered by Gemini)")
+
+        if st.session_state.chatbot_ready:
+            # 1. Provide Initial Advice (in expander to save space and not cause scroll)
+            with st.expander("📋 Initial AI Advice", expanded=True):
+                try:
+                    initial_advice = st.session_state.chatbot.get_advice(st.session_state.last_ml_result)
+                    st.info(initial_advice)
+                except Exception as e:
+                    st.error(f"Error generating advice: {str(e)}")
+
+            # 2. Callback functions to handle button clicks WITHOUT creating page jumps
+            def send_message():
+                """Callback for send button - saves response to session state"""
+                user_q = st.session_state.user_question_input.strip()
+                if user_q:
+                    try:
+                        response = st.session_state.chatbot.continue_conversation(user_q)
+                        st.session_state.conversation_history.append({
+                            "user_q": user_q,
+                            "response": response
+                        })
+                    except Exception as e:
+                        st.session_state.conversation_history.append({
+                            "user_q": user_q,
+                            "response": f"❌ Error: {str(e)}"
+                        })
+            
+            def reset_chat():
+                """Callback for reset button"""
+                st.session_state.chatbot.reset_conversation()
+                st.session_state.conversation_history = []
+
+            # 3. Conversation History - SCROLLABLE CONTAINER (displays first!)
+            st.write("**💬 Chat History:**")
+            chat_container = st.container(border=True, height=400)
+            
+            with chat_container:
+                if st.session_state.conversation_history:
+                    for i, exchange in enumerate(st.session_state.conversation_history):
+                        st.markdown(f"**You:** {exchange['user_q']}")
+                        st.markdown(f"**Advisor:** {exchange['response']}")
+                        if i < len(st.session_state.conversation_history) - 1:
+                            st.divider()
+                else:
+                    st.caption("💭 No questions yet. Ask something below!")
+
+            # 4. Input Section - Uses callbacks WITHOUT rerun!
+            st.write("**Ask follow-up questions:**")
+            col_input, col_send = st.columns([4, 1])
+            
+            with col_input:
+                st.text_input(
+                    "Your question:",
+                    key="user_question_input",
+                    placeholder="e.g., What should I look for in Lead V2?",
+                    on_change=None  # Don't trigger on every keystroke, only on button click
+                )
+            
+            with col_send:
+                st.write("")  # Spacer for alignment
+                st.button("Send ➤", on_click=send_message, use_container_width=True, type="primary")
+            
+            st.button("🔄 Reset Chat", on_click=reset_chat, use_container_width=True)
+            
+        else:
+            st.warning(f"Chatbot unavailable: {st.session_state.get('chatbot_error', 'Check API Key')}")
 
     if batch_btn:
         if not batch_uploads:

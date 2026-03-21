@@ -306,10 +306,65 @@ def load_all_models():
     print("Initializing Core Models...")
     custom_objs = {'LeadSpatialAttention': LeadSpatialAttention}
     
-    MODELS['resnet']  = keras.models.load_model('extractor_resnet.keras', custom_objects=custom_objs)
-    MODELS['blstm']   = keras.models.load_model('extractor_bilstm.keras', custom_objects=custom_objs)
-    MODELS['eegnet']  = keras.models.load_model('extractor_eegnet.keras', custom_objects=custom_objs)
-    MODELS['cwt_cnn'] = keras.models.load_model('extractor_cwt_cnn.keras', custom_objects=custom_objs)
+    model_names = ['resnet', 'blstm', 'eegnet', 'cwt_cnn']
+    model_files = {
+        'resnet': 'extractor_resnet.keras',
+        'blstm': 'extractor_bilstm.keras',
+        'eegnet': 'extractor_eegnet.keras',
+        'cwt_cnn': 'extractor_cwt_cnn.keras'
+    }
+    
+    for model_key, model_file in model_files.items():
+        try:
+            print(f"  Loading {model_file}...")
+            MODELS[model_key] = keras.models.load_model(model_file, custom_objects=custom_objs)
+            print(f"    [OK] {model_file} loaded successfully")
+        except Exception as e:
+            print(f"    [ERROR] Error loading {model_file}: {str(e)[:100]}")
+            raise ValueError(
+                f"\nFailed to load {model_file}.\n"
+                f"This typically means TensorFlow version is incompatible.\n"
+                f"Please reinstall TensorFlow 2.12.0:\n"
+                f"  pip uninstall tensorflow -y\n"
+                f"  pip install tensorflow==2.12.0\n"
+                f"Then restart the app."
+            )
+
+    # Build intermediate feature models (32-d embeddings) instead of final 1-d classifiers.
+    try:
+        print("  Building feature extraction models...")
+        MODELS['resnet_feat'] = keras.Model(
+            inputs=MODELS['resnet'].input,
+            outputs=MODELS['resnet'].get_layer(FEATURE_LAYER_BY_MODEL['resnet']).output,
+        )
+        MODELS['blstm_feat'] = keras.Model(
+            inputs=MODELS['blstm'].input,
+            outputs=MODELS['blstm'].get_layer(FEATURE_LAYER_BY_MODEL['blstm']).output,
+        )
+        MODELS['eegnet_feat'] = keras.Model(
+            inputs=MODELS['eegnet'].input,
+            outputs=MODELS['eegnet'].get_layer(FEATURE_LAYER_BY_MODEL['eegnet']).output,
+        )
+        MODELS['cwt_feat'] = keras.Model(
+            inputs=MODELS['cwt_cnn'].input,
+            outputs=MODELS['cwt_cnn'].get_layer(FEATURE_LAYER_BY_MODEL['cwt_cnn']).output,
+        )
+        print("    [OK] Feature models built successfully")
+    except Exception as e:
+        print(f"    [ERROR] Error building feature models: {str(e)}")
+        raise
+    
+    try:
+        print("  Loading classifier models...")
+        MODELS['scaler']   = joblib.load('brugada_scaler.pkl')
+        MODELS['selector'] = joblib.load('brugada_selector.pkl')
+        MODELS['meta']     = joblib.load('brugada_meta_learner.pkl')
+        print("    [OK] Scaler, selector, and meta-learner loaded successfully")
+    except Exception as e:
+        print(f"    [ERROR] Error loading classifier models: {str(e)}")
+        raise
+    
+    print("[OK] All models initialized successfully!")
 
     # Build intermediate feature models (32-d embeddings) instead of final 1-d classifiers.
     MODELS['resnet_feat'] = keras.Model(

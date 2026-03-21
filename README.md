@@ -16,7 +16,7 @@ Important note: this tool supports triage and workflow prioritization. It does n
 ## 2. Repository Contents
 - `app.py`: Streamlit web interface and report rendering
 - `inference.py`: End-to-end inference pipeline, feature extraction, recommendation logic
-- `requirements.txt`: Python dependencies
+- `requirements.txt`: Python dependencies (includes TensorFlow, scikit-learn, google-genai for AI chatbot)
 - `extractor_resnet.keras`: 1D ResNet feature extractor
 - `extractor_eegnet.keras`: EEGNet-style feature extractor
 - `extractor_bilstm.keras`: Attention-BiLSTM feature extractor
@@ -129,7 +129,7 @@ PowerShell (Windows):
 
 ```powershell
 git clone <your-repository-url>
-cd "Web App"
+cd Brugada
 ```
 
 ### 8.3 Create and activate virtual environment
@@ -154,6 +154,10 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
+**Note:** This will automatically install `google-genai` (required for the AI Chatbot advisor feature). All dependencies including TensorFlow, scikit-learn, and generative AI libraries are included in `requirements.txt`.
+
+
+
 ### 8.5 Verify core files exist
 Confirm these files are present before running:
 - `extractor_resnet.keras`
@@ -164,7 +168,29 @@ Confirm these files are present before running:
 - `brugada_selector.pkl`
 - `brugada_meta_learner.pkl`
 
-### 8.6 Start web app
+### 8.6 Set up Gemini API key (For AI-Powered Chatbot)
+
+The Gemini API is used for the optional AI Clinical Advisor chatbot feature. It's powered by Google's `google-genai` library (already included in `requirements.txt`).
+
+To enable the chatbot, you need a Gemini API key:
+
+1. Go to [Google AI Studio](https://aistudio.google.com/apikey)
+2. Create a new API key
+3. Create a `.streamlit/secrets.toml` file in the Brugada folder with:
+
+```toml
+GEMINI_API_KEY = "your-api-key-here"
+```
+
+Alternatively, set the environment variable:
+
+```powershell
+$env:GEMINI_API_KEY = "your-api-key-here"
+```
+
+**Note:** The app will still run without an API key, but the AI Chatbot feature will be unavailable.
+
+### 8.7 Start web app
 
 ```powershell
 python -m streamlit run app.py
@@ -179,7 +205,7 @@ If setup is already done and dependencies are installed:
 ### 9.1 Open project and activate venv
 
 ```powershell
-cd "Web App"
+cd Brugada
 .\.venv\Scripts\Activate.ps1
 ```
 
@@ -224,20 +250,51 @@ Evidence semantics:
 - Extraction Reliability indicates robustness of delineation process, not disease severity
 
 ## 12. Troubleshooting
-### 12.1 Import warnings in editor
+### 12.1 ImportError or ModuleNotFoundError
+If you see errors like "No module named X":
+- Ensure virtual environment is activated: `.\.venv\Scripts\Activate.ps1`
+- Reinstall dependencies: `pip install -r requirements.txt`
+- Verify the venv interpreter is selected in your editor
+
+### 12.2 Model Deserialization Error (TypeError with Functional/LeadSpatialAttention)
+This error occurs when TensorFlow version is incompatible with saved `.keras` models:
+
+```
+TypeError: Could not deserialize class 'Functional' because its parent module keras.src.models.functional cannot be imported
+```
+
+**Solution:**
+1. Verify TensorFlow version: `python -c "import tensorflow; print(tensorflow.__version__)"`
+2. If not 2.13.0, reinstall the correct version:
+   ```powershell
+   pip uninstall tensorflow -y
+   pip install tensorflow==2.13.0
+   ```
+3. Optionally clear Keras cache:
+   ```powershell
+   python -c "import shutil, os; shutil.rmtree(os.path.expanduser('~/.keras'), ignore_errors=True)"
+   ```
+4. Restart the Streamlit app: `python -m streamlit run app.py`
+
+### 12.3 Import warnings in editor
 If your editor reports unresolved imports for tensorflow, cv2, pywt, or neurokit2:
 - Ensure the selected Python interpreter is the project venv
 - Reinstall dependencies in that venv
 - Restart VS Code Python language server if needed
 
-### 12.2 Streamlit starts but inference fails
+### 12.4 Streamlit starts but inference fails
 - Verify all `.keras` and `.pkl` artifact files are present in project root
 - Ensure uploaded input includes both `.hea` and `.dat`
 - Check file naming consistency for WFDB pair
 
-### 12.3 Performance issues on CPU
+### 12.5 Performance issues on CPU
 - First inference may be slow due to model loading
 - Keep app session running to reuse loaded models
+
+### 12.6 Chatbot unavailable / API key errors
+- Ensure GEMINI_API_KEY is set either in `.streamlit/secrets.toml` or as an environment variable
+- The chatbot is optional; the app works without it if no API key is configured
+- If quota is exceeded (429 error), the app shows a fallback clinical note
 
 ## 13. Known Limitations
 - Evidence strength/reliability logic is heuristic and should be interpreted with clinical context
