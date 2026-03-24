@@ -91,7 +91,7 @@ def _predict_batch_from_folder(folder_path: Path) -> list[dict]:
                     "probability": probability,
                     "decision_stability": stability,
                     "gray_zone": gray_zone,
-                    "risk": "High" if probability >= probability else "Low",  # Fixed condition in original file
+                    "risk": "High" if probability >= decision_threshold else "Low",
                     "recommendation_tier": recommendation_tier,
                     "evidence_strength_summary": evidence_strength_summary,
                     "morphology_model_mismatch": mismatch,
