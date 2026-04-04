@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import plotly.graph_objects as go
 from chatbot import BrugadaChatbot
 from inference import predict_from_record
 
@@ -342,12 +343,35 @@ with right:
             if mismatch:
                 st.markdown(f"<div style='margin-bottom: 1rem; padding: 0.8rem; border-radius: 0.5rem; background-color: #fef3c7; color: #92400e; display: flex; align-items: center;'>{SVG_WARNING} Discordant case: model decision and V1-V3 morphology strength are not strongly aligned. Prioritize manual review.</div>", unsafe_allow_html=True)
 
-            # Metrics
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Decision Confidence", f"{confidence_percent:.1f}%")
-            m2.metric("Threshold Distance", f"{stability_percent:.2f} pp")
-            m3.metric("Predicted-Class Support", f"{class_support_percent:.1f}%")
-            m4.metric("Brugada Risk Probability", f"{probability * 100.0:.2f}%")
+            # Hero metric: make risk probability the main focal point
+            risk_pct = float(probability * 100.0)
+            st.markdown("### Brugada Risk Probability")
+            st.metric("Brugada Risk Probability", f"{risk_pct:.2f}%")
+            st.progress(min(max(risk_pct / 100.0, 0.0), 1.0), text=f"Current risk: {risk_pct:.2f}%")
+
+            gauge_fig = go.Figure(
+                go.Indicator(
+                    mode="gauge",
+                    value=risk_pct,
+                    gauge={
+                        "axis": {"range": [0, 100]},
+                        "bar": {"color": "#DC2626"},
+                        "steps": [
+                            {"range": [0, 40], "color": "#DCFCE7"},
+                            {"range": [40, 70], "color": "#FEF3C7"},
+                            {"range": [70, 100], "color": "#FEE2E2"},
+                        ],
+                    },
+                )
+            )
+            gauge_fig.update_layout(height=210, margin={"l": 14, "r": 14, "t": 8, "b": 8})
+            st.plotly_chart(gauge_fig, use_container_width=True, config={"displayModeBar": False})
+
+            with st.expander("📊 View Statistical Breakdown", expanded=False):
+                s1, s2, s3 = st.columns(3)
+                s1.metric("Decision Confidence", f"{confidence_percent:.1f}%")
+                s2.metric("Threshold Distance", f"{stability_percent:.2f} pp")
+                s3.metric("Predicted-Class Support", f"{class_support_percent:.1f}%")
             
             # Visuals
             st.markdown("### Visualizations")
