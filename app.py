@@ -1,8 +1,18 @@
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
+import html
+import re
 from chatbot import BrugadaChatbot
 from inference import predict_from_record
+from record_store import (
+    get_record_counts,
+    get_record_payload,
+    init_record_store,
+    list_records,
+    save_batch_results,
+    save_record_result,
+    update_record_status,
+)
 
 from file_utils import (
     _save_uploaded_pair,
@@ -24,6 +34,7 @@ from ui_components import (
     get_status_indicator_svg,
     inject_custom_css,
     _plot_12_lead,
+    _render_decision_margin_legend,
     _plot_decision_margin,
     _plot_evidence_heatmap,
     _recommendation_banner
@@ -33,6 +44,15 @@ st.set_page_config(page_title="Brugada AI Assistant", page_icon="ECG", layout="w
 inject_custom_css()
 st.title("Brugada Syndrome Clinical AI Assistant")
 st.caption("Multi-view deep feature stacking + meta-learner for single-patient ECG triage")
+
+if "record_store_ready" not in st.session_state:
+    try:
+        init_record_store()
+        st.session_state.record_store_ready = True
+        st.session_state.record_store_error = ""
+    except Exception as exc:  # noqa: BLE001
+        st.session_state.record_store_ready = False
+        st.session_state.record_store_error = str(exc)
 
 # =============================================================================
 # Chatbot & Session State Initialization
@@ -57,6 +77,16 @@ if "uploader_key" not in st.session_state:
 if "deleted_pairs" not in st.session_state:
     st.session_state.deleted_pairs = set()
 
+if "records_loaded_result" not in st.session_state:
+    st.session_state.records_loaded_result = None
+
+if "persistence_notice" not in st.session_state:
+    st.session_state.persistence_notice = ""
+
+if "batch_record_uid_map" not in st.session_state:
+    st.session_state.batch_record_uid_map = {}
+
+
 def clear_uploads():
     st.session_state.uploader_key += 1
     st.session_state.deleted_pairs = set()
@@ -64,6 +94,43 @@ def clear_uploads():
         st.session_state.last_ml_result = None
     if "batch_results" in st.session_state:
         del st.session_state.batch_results
+
+
+def _render_metric_with_info(column, label: str, value: str, info_markdown: str, info_key: str):
+    """Render metric as a custom card with an icon-only tooltip."""
+    info_lines = []
+    for raw_line in info_markdown.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        line = re.sub(r"\*\*|`", "", line)
+        if line.startswith("- "):
+            line = f"• {line[2:].strip()}"
+        info_lines.append(html.escape(line))
+
+    info_html = "<br>".join(info_lines) if info_lines else html.escape("No additional details.")
+
+    with column:
+        st.markdown(
+            f"""
+            <div class="metric-tile" id="{info_key}">
+                <div class="metric-tile-header">
+                    <span class="metric-tile-label">{html.escape(label)}</span>
+                    <details class="metric-info-details">
+                        <summary>
+                            <span class="metric-info-icon" title="More info">ℹ</span>
+                        </summary>
+                        <div class="metric-info-panel">
+                            <div class="metric-info-panel-title">MORE INFO</div>
+                            {info_html}
+                        </div>
+                    </details>
+                </div>
+                <div class="metric-tile-value">{html.escape(value)}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 left, right = st.columns([1, 2])
 
@@ -94,6 +161,16 @@ with left:
         
         if st.button("Clear Uploads", on_click=clear_uploads, use_container_width=True):
             pass
+
+    with st.expander("Optional Metadata", expanded=False):
+        st.text_input(
+            "Patient ID",
+            key="patient_id_input",
+            placeholder="e.g., PT-001",
+            help="Optional identifier stored with saved records. Leave empty if unavailable.",
+        )
+
+    patient_id = st.session_state.get("patient_id_input", "").strip() or None
 
     st.write("") # Spacing
     run_btn = st.button("Run Diagnosis", type="primary", use_container_width=True)
@@ -224,10 +301,14 @@ with left:
             st.write("")
 
 with right:
-    tab_report, tab_chatbot = st.tabs(["Clinical Report", "AI Advisor"])
+    tab_report, tab_chatbot, tab_records = st.tabs(["Clinical Report", "AI Advisor", "Records Center"])
     
     with tab_report:
         st.subheader("Clinical Report")
+
+        if st.session_state.persistence_notice:
+            st.info(st.session_state.persistence_notice)
+            st.session_state.persistence_notice = ""
 
         # Determine mode
         is_batch = len(pairs) > 1
@@ -244,7 +325,25 @@ with right:
                     with st.spinner("Running inference pipeline..."):
                         record_base = _save_uploaded_pair(hea_upload, dat_upload)
                         result = predict_from_record(str(record_base))
+                        st.session_state.records_loaded_result = None
                         st.session_state.last_ml_result = result
+
+                        if st.session_state.record_store_ready:
+                            try:
+                                record_uid = save_record_result(
+                                    record_name=stem,
+                                    result=result,
+                                    source_mode="single",
+                                    patient_id=patient_id,
+                                )
+                                if isinstance(result, dict):
+                                    result["record_uid"] = record_uid
+                                st.session_state.persistence_notice = f"Saved record '{stem}' to local Records Center."
+                            except Exception as persist_exc:  # noqa: BLE001
+                                st.session_state.persistence_notice = (
+                                    f"Diagnosis completed, but local save failed: {persist_exc}"
+                                )
+
                         # Reset chat for a new record
                         if st.session_state.chatbot_ready:
                             st.session_state.chatbot.reset_conversation()
@@ -256,7 +355,21 @@ with right:
                 with st.spinner("Scoring all uploaded records..."):
                     batch_dir = _save_batch_folder(uploaded_files)
                     batch_results = _predict_batch_from_folder(batch_dir)
+                    st.session_state.records_loaded_result = None
                     st.session_state.batch_results = batch_results
+
+                    if st.session_state.record_store_ready:
+                        try:
+                            uid_map = save_batch_results(batch_results, patient_id=patient_id)
+                            st.session_state.batch_record_uid_map = uid_map
+                            st.session_state.persistence_notice = (
+                                f"Saved {len(uid_map)}/{len(batch_results)} batch records to local Records Center."
+                            )
+                        except Exception as persist_exc:  # noqa: BLE001
+                            st.session_state.persistence_notice = (
+                                f"Batch diagnosis completed, but local save failed: {persist_exc}"
+                            )
+
                     st.rerun()
 
         current_view = st.session_state.get("current_view", "Batch Summary")
@@ -266,8 +379,13 @@ with right:
 
         single_result_to_show = None
         has_results = False
+
+        loaded_record_result = st.session_state.get("records_loaded_result")
+        if loaded_record_result is not None:
+            single_result_to_show = loaded_record_result
+            has_results = True
         
-        if not is_batch and st.session_state.last_ml_result is not None:
+        elif not is_batch and st.session_state.last_ml_result is not None:
             single_result_to_show = st.session_state.last_ml_result
             has_results = True
         elif is_batch and "batch_results" in st.session_state:
@@ -287,12 +405,15 @@ with right:
             result = single_result_to_show
             if isinstance(result, dict):
                 label = result.get("label", "Unknown")
-                confidence_percent = float(result.get("confidence", 0.0))
-                stability_percent = float(result.get("decision_stability", 0.0))
+                operational_probability = float(result.get("probability", 0.0))
+                operational_threshold = float(result.get("decision_threshold", 0.05))
+                probability = float(result.get("display_probability", operational_probability))
+                decision_threshold = float(result.get("display_threshold", 0.35))
+                gray_zone_upper = float(result.get("display_gray_zone_upper", min(1.0, decision_threshold + 0.01)))
+                confidence_percent = float(result.get("display_confidence", result.get("confidence", 0.0)))
+                stability_percent = float(result.get("display_decision_stability", result.get("decision_stability", 0.0)))
                 class_support_percent = float(result.get("class_support", 0.0))
-                probability = float(result.get("probability", 0.0))
                 gray_zone = bool(result.get("gray_zone", False))
-                decision_threshold = float(result.get("decision_threshold", 0.05))
                 clinician_explain = _normalize_clinician_explain(result.get("clinician_explain", {}))
                 model_contributions = result.get("model_contributions", {}) or {}
                 explanation = result.get(
@@ -306,12 +427,15 @@ with right:
                 clinical_evidence = result.get("clinical_evidence", [])
             else:
                 label = result.label
-                confidence_percent = float(result.confidence_percent)
-                stability_percent = float(getattr(result, "decision_stability", 0.0))
+                operational_probability = float(getattr(result, "probability", 0.0))
+                operational_threshold = float(getattr(result, "decision_threshold", 0.05))
+                probability = float(getattr(result, "display_probability", operational_probability))
+                decision_threshold = float(getattr(result, "display_threshold", 0.35))
+                gray_zone_upper = float(getattr(result, "display_gray_zone_upper", min(1.0, decision_threshold + 0.01)))
+                confidence_percent = float(getattr(result, "display_confidence", getattr(result, "confidence_percent", 0.0)))
+                stability_percent = float(getattr(result, "display_decision_stability", getattr(result, "decision_stability", 0.0)))
                 class_support_percent = float(getattr(result, "class_support", 0.0))
-                probability = float(result.probability)
                 gray_zone = bool(getattr(result, "gray_zone", False))
-                decision_threshold = float(getattr(result, "decision_threshold", 0.05))
                 clinician_explain = _normalize_clinician_explain(getattr(result, "clinician_explain", {}))
                 model_contributions = getattr(result, "model_contributions", {}) or {}
                 explanation = result.explanation
@@ -339,64 +463,91 @@ with right:
             _recommendation_banner(rec_tier, rec_text)
             
             if gray_zone:
-                st.markdown(f"<div style='margin-bottom: 1rem; padding: 0.8rem; border-radius: 0.5rem; background-color: #fef3c7; color: #92400e; display: flex; align-items: center;'>{SVG_WARNING} Gray-zone prediction: probability is close to the decision threshold and needs clinician review.</div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='margin-bottom: 1rem; padding: 0.8rem; border-radius: 0.5rem; background-color: #fef3c7; color: #92400e; display: flex; align-items: center;'>{SVG_WARNING} Gray-zone prediction: score is close to the 0.35 boundary and requires cardiology review.</div>", unsafe_allow_html=True)
             if mismatch:
                 st.markdown(f"<div style='margin-bottom: 1rem; padding: 0.8rem; border-radius: 0.5rem; background-color: #fef3c7; color: #92400e; display: flex; align-items: center;'>{SVG_WARNING} Discordant case: model decision and V1-V3 morphology strength are not strongly aligned. Prioritize manual review.</div>", unsafe_allow_html=True)
 
-            # Hero metric: make risk probability the main focal point
+            # L1: concise decision snapshot
             risk_pct = float(probability * 100.0)
-            st.markdown("### Brugada Risk Probability")
-            st.metric("Brugada Risk Probability", f"{risk_pct:.2f}%")
-            st.progress(min(max(risk_pct / 100.0, 0.0), 1.0), text=f"Current risk: {risk_pct:.2f}%")
+            st.markdown("### Diagnostic Snapshot")
+            m1, m2, m3 = st.columns(3)
+            _render_metric_with_info(
+                m1,
+                "Brugada Risk Score",
+                f"{risk_pct:.2f}%",
+                "**What it means**\n"
+                "- Report-aligned risk score shown on the UI scale.\n\n"
+                "**How it is derived**\n"
+                "- Monotonic remap of raw model probability.\n"
+                "- Keeps ordering and decision consistency while mapping 0.05 -> 0.35 for display.",
+                "metric_info_risk",
+            )
+            _render_metric_with_info(
+                m2,
+                "Decision Confidence",
+                f"{confidence_percent:.1f}%",
+                "**What it means**\n"
+                "- Boundary-aware certainty of the current decision.\n\n"
+                "**How it is derived**\n"
+                "- Uses distance to the display threshold (0.35).\n"
+                "- Near boundary -> closer to 50%; farther away -> closer to 100%.",
+                "metric_info_confidence",
+            )
+            _render_metric_with_info(
+                m3,
+                "Prediction Support",
+                f"{class_support_percent:.1f}%",
+                "**What it means**\n"
+                "- Posterior support for the predicted class.\n\n"
+                "**How it is derived**\n"
+                "- If predicted Brugada: support = P(Brugada).\n"
+                "- If predicted Normal: support = 1 - P(Brugada).",
+                "metric_info_support",
+            )
 
-            gauge_fig = go.Figure(
-                go.Indicator(
-                    mode="gauge",
-                    value=risk_pct,
-                    gauge={
-                        "axis": {"range": [0, 100]},
-                        "bar": {"color": "#DC2626"},
-                        "steps": [
-                            {"range": [0, 40], "color": "#DCFCE7"},
-                            {"range": [40, 70], "color": "#FEF3C7"},
-                            {"range": [70, 100], "color": "#FEE2E2"},
-                        ],
-                    },
+            threshold_relation = "Above 0.35 boundary" if probability >= decision_threshold else "Below 0.35 boundary"
+            st.caption(f"{threshold_relation} | Boundary distance: {stability_percent:.2f} pp")
+            if next_actions:
+                st.info(f"Next action: {next_actions[0]}")
+            
+            # L2: compact evidence visuals
+            st.markdown("### Key Evidence")
+            v1, v2 = st.columns(2)
+            
+            with v1:
+                _render_decision_margin_legend(
+                    probability=probability,
+                    threshold=decision_threshold,
                 )
-            )
-            gauge_fig.update_layout(height=210, margin={"l": 14, "r": 14, "t": 8, "b": 8})
-            st.plotly_chart(gauge_fig, use_container_width=True, config={"displayModeBar": False})
+                margin_fig = _plot_decision_margin(
+                    probability=probability,
+                    threshold=decision_threshold,
+                    gray_zone_upper=gray_zone_upper,
+                )
+                st.pyplot(margin_fig, clear_figure=True)
 
-            with st.expander("📊 View Statistical Breakdown", expanded=False):
-                s1, s2, s3 = st.columns(3)
-                s1.metric("Decision Confidence", f"{confidence_percent:.1f}%")
-                s2.metric("Threshold Distance", f"{stability_percent:.2f} pp")
-                s3.metric("Predicted-Class Support", f"{class_support_percent:.1f}%")
+            with v2:
+                if clinical_evidence:
+                    evidence_df = pd.DataFrame(clinical_evidence)
+                    heatmap_fig = _plot_evidence_heatmap(evidence_df)
+                    st.pyplot(heatmap_fig, clear_figure=True)
+                else:
+                    st.info("No extractable V1-V3 morphology evidence for this record.")
             
-            # Visuals
-            st.markdown("### Visualizations")
-            
-            margin_fig = _plot_decision_margin(probability=probability, threshold=decision_threshold)
-            st.pyplot(margin_fig, clear_figure=True)
+            with st.expander("View 12-lead ECG", expanded=False):
+                plot_highlights = highlights if (label == "Brugada Syndrome Detected" or gray_zone) else {}
+                ecg_fig = _plot_12_lead(
+                    signal=signal_plot,
+                    lead_names=lead_names,
+                    fs=fs_plot,
+                    highlights=plot_highlights,
+                )
+                st.pyplot(ecg_fig, clear_figure=True)
 
-            if clinical_evidence:
-                evidence_df = pd.DataFrame(clinical_evidence)
-                heatmap_fig = _plot_evidence_heatmap(evidence_df)
-                st.pyplot(heatmap_fig, clear_figure=True)
-            
-            plot_highlights = highlights if (label == "Brugada Syndrome Detected" or gray_zone) else {}
-            ecg_fig = _plot_12_lead(
-                signal=signal_plot,
-                lead_names=lead_names,
-                fs=fs_plot,
-                highlights=plot_highlights,
-            )
-            st.pyplot(ecg_fig, clear_figure=True)
-
-            # Long Text Elements
+            # L3: detailed evidence and full explanation
             with st.expander("Detailed Clinical Explanation & Evidence", expanded=False):
                 st.write(explanation or "No explanation text returned by model.")
-                st.caption(f"Raw probability: {probability:.4f} | Threshold: {decision_threshold:.4f}")
+                st.caption(f"Risk score: {probability:.4f} | Decision boundary: {decision_threshold:.4f}")
                 
                 if gray_zone or stability_percent <= 1.0:
                     st.markdown(f"<div style='margin-top: 1rem; margin-bottom: 1rem; padding: 0.8rem; border-radius: 0.5rem; background-color: #fef3c7; color: #92400e; display: flex; align-items: center;'>{SVG_WARNING} <strong>Borderline Interpretation Protocol</strong></div>", unsafe_allow_html=True)
@@ -417,6 +568,17 @@ with right:
                         )
                         st.dataframe(display_df, use_container_width=True)
 
+                if model_contributions:
+                    contrib_df = (
+                        pd.DataFrame(
+                            [{"view": k, "contribution_percent": v} for k, v in model_contributions.items()]
+                        )
+                        .sort_values("contribution_percent", ascending=False)
+                        .reset_index(drop=True)
+                    )
+                    st.subheader("Model Contribution Summary")
+                    st.dataframe(contrib_df, use_container_width=True)
+
                 st.subheader("Recommended Clinical Actions")
                 st.caption(
                     f"Tier: {rec_tier} | Evidence S/M/W: "
@@ -429,27 +591,38 @@ with right:
                         st.write(f"- {action}")
                 
                 evidence_segments = sum(_safe_int(item.get("segments", 0)) for item in clinical_evidence)
-                if probability >= decision_threshold and evidence_segments == 0:
+                if operational_probability >= operational_threshold and evidence_segments == 0:
                     st.markdown(f"<div style='margin-bottom: 1rem; padding: 0.8rem; border-radius: 0.5rem; background-color: #fef3c7; color: #92400e; display: flex; align-items: center;'>{SVG_WARNING} High-risk prediction with no V1-V3 morphological evidence. Manual cardiology review is recommended.</div>", unsafe_allow_html=True)
 
         # --- Batch Record Display Logic ---
-        if 'batch_results' in st.session_state and is_batch and current_view == "Batch Summary":
+        if 'batch_results' in st.session_state and is_batch and current_view == "Batch Summary" and loaded_record_result is None:
             batch_results = st.session_state.batch_results
             if not batch_results:
                 st.markdown(f"<div style='margin-bottom: 1rem; padding: 0.8rem; border-radius: 0.5rem; background-color: #fef3c7; color: #92400e; display: flex; align-items: center;'>{SVG_WARNING} No valid WFDB pairs found in batch uploads.</div>", unsafe_allow_html=True)
             else:
                 df = pd.DataFrame(batch_results)
+                sort_prob_col = "probability_raw" if "probability_raw" in df.columns else "probability"
+                sort_stability_col = "decision_stability_raw" if "decision_stability_raw" in df.columns else "decision_stability"
                 if "recommendation_tier" in df.columns:
                     df["_tier_rank"] = df["recommendation_tier"].map(_tier_sort_value)
-                    df = df.sort_values(["_tier_rank", "probability", "decision_stability"], ascending=[True, False, False]).drop(columns=["_tier_rank"])
+                    df = df.sort_values(["_tier_rank", sort_prob_col, sort_stability_col], ascending=[True, False, False]).drop(columns=["_tier_rank"])
                 else:
-                    df = df.sort_values("probability", ascending=False)
+                    df = df.sort_values(sort_prob_col, ascending=False)
                 # Drop raw before showing dataframe
-                display_df = df.drop(columns=["raw"]) if "raw" in df.columns else df
+                hidden_cols = [
+                    c
+                    for c in ["raw", "probability_raw", "decision_stability_raw", "decision_threshold_raw"]
+                    if c in df.columns
+                ]
+                display_df = df.drop(columns=hidden_cols) if hidden_cols else df
                 st.dataframe(display_df, use_container_width=True)
 
                 st.subheader("Urgent Review Queue")
-                urgent = df[df["recommendation_tier"].isin(["urgent_cardiology_review", "urgent_review_repeat_ecg_quality_check"])].sort_values("probability", ascending=False) if "recommendation_tier" in df.columns else df.iloc[0:0]
+                urgent = (
+                    df[df["recommendation_tier"].isin(["urgent_cardiology_review", "urgent_review_repeat_ecg_quality_check"])].sort_values(sort_prob_col, ascending=False)
+                    if "recommendation_tier" in df.columns
+                    else df.iloc[0:0]
+                )
                 if urgent.empty:
                     st.markdown(f"<div style='margin-bottom: 1rem; padding: 0.8rem; border-radius: 0.5rem; background-color: #e0f2fe; color: #075985; display: flex; align-items: center;'>{SVG_INFO} No urgent-cardiology records in this batch.</div>", unsafe_allow_html=True)
                 else:
@@ -466,7 +639,9 @@ with right:
         st.subheader("AI Clinical Advisor")
         st.caption("Ask questions about the diagnosis and get evidence-based clinical guidance")
 
-        if is_batch and current_view == "Batch Summary":
+        advisor_target_result = single_result_to_show if single_result_to_show is not None else st.session_state.last_ml_result
+
+        if is_batch and current_view == "Batch Summary" and advisor_target_result is None:
             st.markdown(f"<div style='margin-bottom: 1rem; padding: 0.8rem; border-radius: 0.5rem; background-color: #e0f2fe; color: #075985; display: flex; align-items: center;'>{SVG_INFO} The AI Advisor requires a specific patient record. Please select a record from the 'Uploaded Record Pairs' sidebar to view its clinical advice and ask questions.</div>", unsafe_allow_html=True)
         elif st.session_state.chatbot_ready:
             st.markdown(f"""
@@ -479,32 +654,35 @@ with right:
             """, unsafe_allow_html=True)
 
             with st.expander("Initial AI Advice", expanded=True):
-                try:
-                    with st.spinner("Analyzing clinical data and generating advice..."):
-                        initial_advice = st.session_state.chatbot.get_advice(single_result_to_show if single_result_to_show else st.session_state.last_ml_result)
+                if advisor_target_result is None:
+                    st.info("Run a diagnosis or load a saved record to generate AI advice.")
+                else:
+                    try:
+                        with st.spinner("Analyzing clinical data and generating advice..."):
+                            initial_advice = st.session_state.chatbot.get_advice(advisor_target_result)
                     
-                    import re
-                    # Parse sections strictly by ### 
-                    sections = re.split(r'\n(?=### )', "\n" + initial_advice)
-                    
-                    for section in sections:
-                        section = section.strip()
-                        if not section: continue
+                        import re
+                        # Parse sections strictly by ### 
+                        sections = re.split(r'\n(?=### )', "\n" + initial_advice)
                         
-                        lower_section = section.lower()
-                        if "consideration" in lower_section or "differential" in lower_section:
-                            bg_col, border_col, svg_icon = "#fffbeb", "#fef08a", SVG_WARNING
-                        elif "step" in lower_section or "action" in lower_section or "recommend" in lower_section:
-                            bg_col, border_col, svg_icon = "#f0fdf4", "#bbf7d0", SVG_SUCCESS
-                        else:
-                            bg_col, border_col, svg_icon = "#f0f9ff", "#bae6fd", SVG_INFO
+                        for section in sections:
+                            section = section.strip()
+                            if not section: continue
+                            
+                            lower_section = section.lower()
+                            if "consideration" in lower_section or "differential" in lower_section:
+                                bg_col, border_col, svg_icon = "#fffbeb", "#fef08a", SVG_WARNING
+                            elif "step" in lower_section or "action" in lower_section or "recommend" in lower_section:
+                                bg_col, border_col, svg_icon = "#f0fdf4", "#bbf7d0", SVG_SUCCESS
+                            else:
+                                bg_col, border_col, svg_icon = "#f0f9ff", "#bae6fd", SVG_INFO
 
-                        # Separate heading from body to inject custom styling for heading
-                        lines = section.split('\n', 1)
-                        heading = lines[0].replace('###', '').strip()
-                        body = lines[1] if len(lines) > 1 else ""
+                            # Separate heading from body to inject custom styling for heading
+                            lines = section.split('\n', 1)
+                            heading = lines[0].replace('###', '').strip()
+                            body = lines[1] if len(lines) > 1 else ""
 
-                        st.markdown(f'''
+                            st.markdown(f'''
 <style>
 .ai-advice-container p, .ai-advice-container li, .ai-advice-container span, .ai-advice-container strong {{
     color: #1e293b !important;
@@ -519,8 +697,8 @@ with right:
 
 </div>
 ''', unsafe_allow_html=True)
-                except Exception as e:
-                    st.markdown(f"<div style='margin-bottom: 1rem; padding: 0.8rem; border-radius: 0.5rem; background-color: #fee2e2; color: #991b1b; display: flex; align-items: center;'>{SVG_ERROR} Error generating advice: {str(e)}</div>", unsafe_allow_html=True)
+                    except Exception as e:
+                        st.markdown(f"<div style='margin-bottom: 1rem; padding: 0.8rem; border-radius: 0.5rem; background-color: #fee2e2; color: #991b1b; display: flex; align-items: center;'>{SVG_ERROR} Error generating advice: {str(e)}</div>", unsafe_allow_html=True)
 
             def send_message():
                 user_q = st.session_state.user_question_input.strip()
@@ -607,3 +785,153 @@ with right:
             </div>
             """
             st.markdown(error_html, unsafe_allow_html=True)
+
+    with tab_records:
+        st.subheader("Records Center")
+        st.caption("Persistent local registry for record history, retrieval, and lifecycle management.")
+
+        if not st.session_state.record_store_ready:
+            store_error = st.session_state.get("record_store_error", "Unknown storage initialization error")
+            st.markdown(
+                f"<div style='margin-bottom: 1rem; padding: 0.8rem; border-radius: 0.5rem; background-color: #fee2e2; color: #991b1b; display: flex; align-items: center;'>{SVG_ERROR} Local record store unavailable: {store_error}</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            try:
+                counts = get_record_counts()
+            except Exception as count_exc:  # noqa: BLE001
+                st.error(f"Unable to read record counters: {count_exc}")
+                counts = {"active": 0, "archived": 0, "deleted": 0}
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Active", str(counts.get("active", 0)))
+            c2.metric("Archived", str(counts.get("archived", 0)))
+            c3.metric("Deleted", str(counts.get("deleted", 0)))
+
+            status_display = st.radio(
+                "Status Filter",
+                ["Active", "Archived", "Deleted", "All"],
+                horizontal=True,
+                key="records_status_filter",
+            )
+            status_map = {
+                "Active": "active",
+                "Archived": "archived",
+                "Deleted": "deleted",
+                "All": "all",
+            }
+            selected_status = status_map[status_display]
+
+            search_query = st.text_input(
+                "Search Records",
+                key="records_search_query",
+                placeholder="Record name, patient ID, or label",
+            )
+
+            try:
+                records = list_records(status=selected_status, search=search_query, limit=500)
+            except Exception as list_exc:  # noqa: BLE001
+                st.error(f"Unable to load records: {list_exc}")
+                records = []
+
+            if not records:
+                st.markdown(
+                    f"<div style='margin-bottom: 1rem; padding: 0.8rem; border-radius: 0.5rem; background-color: #e0f2fe; color: #075985; display: flex; align-items: center;'>{SVG_INFO} No records found for the selected filter.</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                records_df = pd.DataFrame(records)
+                records_df["risk_score_pct"] = (records_df["probability_display"] * 100.0).round(2)
+                records_df["boundary_distance_pp"] = records_df["decision_stability_display"].round(2)
+
+                display_columns = [
+                    "created_at",
+                    "record_name",
+                    "patient_id",
+                    "label",
+                    "risk_score_pct",
+                    "boundary_distance_pp",
+                    "recommendation_tier",
+                    "status",
+                    "evidence_summary",
+                ]
+                st.dataframe(
+                    records_df[display_columns].rename(
+                        columns={
+                            "created_at": "timestamp_utc",
+                            "record_name": "record",
+                            "patient_id": "patient_id",
+                            "risk_score_pct": "risk_score_%",
+                            "boundary_distance_pp": "decision_stability_pp",
+                        }
+                    ),
+                    use_container_width=True,
+                )
+
+                option_map = {}
+                for item in records:
+                    record_line = (
+                        f"{item['created_at']} | {item['record_name']} | "
+                        f"{item['label']} | {item['probability_display'] * 100.0:.2f}%"
+                    )
+                    option_map[record_line] = item["record_uid"]
+
+                selected_label = st.selectbox(
+                    "Select Record",
+                    options=list(option_map.keys()),
+                    key="records_selected_label",
+                )
+                selected_uid = option_map[selected_label]
+                selected_item = next((item for item in records if item["record_uid"] == selected_uid), None)
+
+                if selected_item is not None:
+                    a1, a2, a3 = st.columns(3)
+
+                    with a1:
+                        if st.button("Load Into Clinical Report", key=f"records_load_{selected_uid}", use_container_width=True):
+                            payload = get_record_payload(selected_uid)
+                            if payload is None:
+                                st.error("Unable to load selected record payload from local storage.")
+                            else:
+                                st.session_state.records_loaded_result = payload
+                                st.session_state.last_ml_result = payload
+                                st.session_state.persistence_notice = (
+                                    f"Loaded saved record '{selected_item['record_name']}' into Clinical Report."
+                                )
+                                if st.session_state.chatbot_ready:
+                                    st.session_state.chatbot.reset_conversation()
+                                    st.session_state.conversation_history = []
+                                st.rerun()
+
+                    with a2:
+                        if selected_item["status"] == "active":
+                            if st.button("Archive", key=f"records_archive_{selected_uid}", use_container_width=True):
+                                if update_record_status(selected_uid, "archived"):
+                                    st.session_state.persistence_notice = "Record archived."
+                                st.rerun()
+                        elif selected_item["status"] == "archived":
+                            if st.button("Restore", key=f"records_restore_{selected_uid}", use_container_width=True):
+                                if update_record_status(selected_uid, "active"):
+                                    st.session_state.persistence_notice = "Record restored to active status."
+                                st.rerun()
+                        else:
+                            st.caption("Archive action unavailable for deleted records.")
+
+                    with a3:
+                        if selected_item["status"] != "deleted":
+                            if st.button("Soft Delete", key=f"records_delete_{selected_uid}", use_container_width=True):
+                                if update_record_status(selected_uid, "deleted"):
+                                    st.session_state.persistence_notice = "Record moved to deleted status."
+                                st.rerun()
+                        else:
+                            if st.button("Recover", key=f"records_recover_{selected_uid}", use_container_width=True):
+                                if update_record_status(selected_uid, "active"):
+                                    st.session_state.persistence_notice = "Record recovered from deleted status."
+                                st.rerun()
+
+                    with st.expander("Selected Record Summary", expanded=False):
+                        st.write(f"Record UID: {selected_item['record_uid']}")
+                        st.write(f"Label: {selected_item['label']}")
+                        st.write(f"Recommendation Tier: {selected_item['recommendation_tier']}")
+                        st.write(f"Evidence Summary: {selected_item['evidence_summary']}")
+                        st.write(f"Recommendation: {selected_item['recommendation_text']}")

@@ -2,7 +2,13 @@ import os
 import time
 import streamlit as st
 from typing import Optional
-import google.genai as genai
+
+try:
+    import google.genai as genai
+    _GENAI_IMPORT_ERROR = None
+except ModuleNotFoundError as exc:
+    genai = None
+    _GENAI_IMPORT_ERROR = exc
 
 
 class BrugadaChatbot:
@@ -17,6 +23,12 @@ class BrugadaChatbot:
 
     def __init__(self, api_key: Optional[str] = None):
         """Initialize with robust API key and model selection."""
+        if genai is None:
+            raise ValueError(
+                "google-genai is not installed. Install it with: "
+                ".\\.venv\\Scripts\\python.exe -m pip install google-genai"
+            ) from _GENAI_IMPORT_ERROR
+
         # 1. API Key Retrieval
         if api_key is None:
             api_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
@@ -65,6 +77,53 @@ class BrugadaChatbot:
         self.chat_history = []
 
     @staticmethod
+    def _is_quota_error(error_str: str) -> bool:
+        return any(
+            token in error_str
+            for token in [
+                "429",
+                "quota",
+                "rate limit",
+                "resource_exhausted",
+                "too many requests",
+            ]
+        )
+
+    @staticmethod
+    def _is_transient_error(error_str: str) -> bool:
+        return any(
+            token in error_str
+            for token in [
+                "503",
+                "unavailable",
+                "high demand",
+                "temporarily",
+                "deadline exceeded",
+                "backend error",
+                "overloaded",
+            ]
+        )
+
+    def _switch_to_next_model(self) -> bool:
+        """Rotate to the next fallback model when current model is temporarily unavailable."""
+        if not self.MODEL_CANDIDATES:
+            return False
+        if self.model not in self.MODEL_CANDIDATES:
+            self.model = self.MODEL_CANDIDATES[0]
+            return True
+
+        if len(self.MODEL_CANDIDATES) == 1:
+            return False
+
+        idx = self.MODEL_CANDIDATES.index(self.model)
+        next_model = self.MODEL_CANDIDATES[(idx + 1) % len(self.MODEL_CANDIDATES)]
+        if next_model == self.model:
+            return False
+
+        self.model = next_model
+        return True
+
+    @staticmethod
     def _get_val(ml_result, key, default=0.0):
         """Safely extract value from dict or object."""
         if isinstance(ml_result, dict):
@@ -76,7 +135,8 @@ class BrugadaChatbot:
         if ml_result is None:
             return "Please run a diagnosis first to get AI advice."
 
-        prob = self._get_val(ml_result, "probability")
+        prob = float(self._get_val(ml_result, "display_probability", self._get_val(ml_result, "probability", 0.0)))
+        threshold = float(self._get_val(ml_result, "display_threshold", 0.35))
         label = self._get_val(ml_result, "label", "Unknown")
 
         # Create cache key with wider ranges to increase cache hit rate
@@ -93,6 +153,7 @@ class BrugadaChatbot:
         prompt = (
             f"Clinical case: ML model classified this ECG as '{label}' "
             f"with probability {prob:.4f}.\n"
+            f"Use decision threshold {threshold:.2f} when describing risk relative to boundary.\n"
             f"Provide a structured clinical interpretation broken perfectly into these three exact Markdown headings:\n"
             f"### Interpretation\n"
             f"### Key Considerations\n"
@@ -101,10 +162,17 @@ class BrugadaChatbot:
         )
 
         advice = self._send_with_retry(prompt, ml_result)
-        
-        # Cache the result
-        self._advice_cache[cache_key] = advice
-        print(f"[Cached] Stored advice for {label} (prob ~{prob_rounded}) for future use")
+
+        # Cache only successful model outputs, not transient errors/fallback notices.
+        non_cache_prefixes = (
+            "**advisor error",
+            "**api quota exceeded",
+            "**ai advisor temporarily unavailable",
+            "### ai advisor -",
+        )
+        if advice and not advice.strip().lower().startswith(non_cache_prefixes):
+            self._advice_cache[cache_key] = advice
+            print(f"[Cached] Stored advice for {label} (prob ~{prob_rounded}) for future use")
         return advice
 
     def continue_conversation(self, user_message: str) -> str:
@@ -134,27 +202,38 @@ class BrugadaChatbot:
 
             except Exception as e:
                 error_str = str(e).lower()
-                is_quota_error = any(
-                    x in error_str
-                    for x in ["429", "quota", "rate limit", "resource", "too many", "resource_exhausted"]
-                )
+                is_quota_error = self._is_quota_error(error_str)
+                is_transient_error = self._is_transient_error(error_str)
 
-                # For quota errors, retry with exponential backoff (longer wait times)
-                if is_quota_error and attempt < retries - 1:
-                    wait = min(2 ** (attempt + 2), 60)  # Increased wait: 4s, 8s, 16s, 32s, 60s...
-                    msg = f"Quota limit hit. Waiting {wait}s before retry ({attempt + 1}/{retries})..."
+                # Retry temporary failures with backoff and model fallback.
+                if (is_quota_error or is_transient_error) and attempt < retries - 1:
+                    switched = self._switch_to_next_model()
+                    wait = min(2 ** (attempt + 1), 60 if is_quota_error else 20)
+                    reason = "Quota/rate limit" if is_quota_error else "Model temporarily busy"
+                    switch_note = f" Switched to {self.model}." if switched else ""
+                    msg = f"{reason}. Retrying in {wait}s ({attempt + 1}/{retries}).{switch_note}"
                     print(msg)
-                    st.toast(msg) # Streamlit toast to show retrying without blocking
+                    st.toast(msg)
                     time.sleep(wait)
                     continue
-                elif is_quota_error and ml_result:
-                    # After all retries, use offline fallback
-                    return self._offline_fallback(ml_result)
+
+                if is_quota_error and ml_result:
+                    # After retries, use offline fallback for patient safety continuity.
+                    return self._offline_fallback(ml_result, reason="quota")
                 elif is_quota_error:
                     return (
                         "**API Quota Exceeded**\n\n"
                         "The system is rate-limited. Please try again in a few minutes. "
                         "Run a diagnosis for offline guidance."
+                    )
+
+                if is_transient_error and ml_result:
+                    return self._offline_fallback(ml_result, reason="busy")
+                elif is_transient_error:
+                    return (
+                        "**AI Advisor Temporarily Unavailable (503)**\n\n"
+                        "The model endpoint is currently busy (high demand). "
+                        "Please try again shortly."
                     )
 
                 # For 404 model not found, that's a configuration issue
@@ -177,21 +256,29 @@ class BrugadaChatbot:
 
         return "Failed after retries. Please try again in a few minutes."
 
-    def _offline_fallback(self, ml_result: dict) -> str:
-        """Provide offline clinical guidance when API quota is exceeded."""
-        prob = self._get_val(ml_result, "probability")
+    def _offline_fallback(self, ml_result: dict, reason: str = "quota") -> str:
+        """Provide offline clinical guidance when API service is unavailable."""
+        prob = float(self._get_val(ml_result, "display_probability", self._get_val(ml_result, "probability", 0.0)))
+        threshold = float(self._get_val(ml_result, "display_threshold", 0.35))
         label = self._get_val(ml_result, "label", "Unknown")
 
+        if reason == "busy":
+            title = "### AI Advisor - Service Busy"
+            intro = "The Gemini API is temporarily unavailable due to high demand."
+        else:
+            title = "### AI Advisor - Quota Exceeded"
+            intro = "The Gemini API has hit its rate limit."
+
         return (
-            f"### AI Advisor - Quota Exceeded\n\n"
-            f"The Gemini API has hit its rate limit. The system will resume "
+            f"{title}\n\n"
+            f"{intro} The system will resume "
             f"providing AI guidance shortly.\n\n"
             f"**Your ECG Analysis:**\n"
             f"- **Result:** {label}\n"
             f"- **ML Probability:** {prob:.4f}\n\n"
             f"**Interim Clinical Protocol:**\n"
             f"1. Manually review ECG leads V1-V3 for Brugada-type ST elevation pattern\n"
-            f"2. **If probability > 0.05:** Escalate for urgent cardiology review\n"
+            f"2. **If probability > {threshold:.2f}:** Escalate for urgent cardiology review\n"
             f"3. Correlate with patient history:\n"
             f"   - Syncope or palpitations?\n"
             f"   - Family history of sudden death?\n"
