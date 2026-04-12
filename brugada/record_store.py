@@ -256,8 +256,13 @@ def save_record_result(
     return record_uid
 
 
-def save_batch_results(batch_results: list[dict], patient_id: str | None = None) -> dict[str, str]:
+def save_batch_results(
+    batch_results: list[dict],
+    patient_id: str | None = None,
+    patient_id_by_record: dict[str, str] | None = None,
+) -> dict[str, str]:
     uid_by_record: dict[str, str] = {}
+    patient_id_by_record = patient_id_by_record or {}
 
     for item in batch_results:
         if not isinstance(item, dict):
@@ -272,11 +277,12 @@ def save_batch_results(batch_results: list[dict], patient_id: str | None = None)
             continue
 
         try:
+            record_patient_id = patient_id_by_record.get(record_name, patient_id)
             record_uid = save_record_result(
                 record_name=record_name,
                 result=payload,
                 source_mode="batch",
-                patient_id=patient_id,
+                patient_id=record_patient_id,
             )
             uid_by_record[record_name] = record_uid
         except Exception:  # noqa: BLE001
@@ -393,6 +399,54 @@ def update_record_status(record_uid: str, new_status: str) -> bool:
         changed = cur.rowcount > 0
         if changed:
             _write_audit(conn, record_uid, "status_changed", f"new_status={status}")
+        conn.commit()
+
+    return changed
+
+
+def update_record_status_bulk(record_uids: list[str], new_status: str) -> int:
+    init_record_store()
+
+    allowed = {"active", "archived", "deleted"}
+    status = (new_status or "").strip().lower()
+    if status not in allowed:
+        raise ValueError(f"Unsupported status: {new_status}")
+
+    cleaned_uids = [str(uid).strip() for uid in (record_uids or []) if str(uid).strip()]
+    if not cleaned_uids:
+        return 0
+
+    changed_count = 0
+    now_iso = _now_utc_iso()
+    with _connect() as conn:
+        for record_uid in cleaned_uids:
+            cur = conn.execute(
+                "UPDATE records SET status = ?, updated_at = ? WHERE record_uid = ?",
+                (status, now_iso, record_uid),
+            )
+            if cur.rowcount > 0:
+                changed_count += 1
+                _write_audit(conn, record_uid, "status_changed", f"new_status={status}")
+        conn.commit()
+
+    return changed_count
+
+
+def update_record_patient_id(record_uid: str, patient_id: str | None) -> bool:
+    init_record_store()
+
+    normalized_patient_id = (patient_id or "").strip()
+    patient_value = normalized_patient_id if normalized_patient_id else None
+
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE records SET patient_id = ?, updated_at = ? WHERE record_uid = ?",
+            (patient_value, _now_utc_iso(), record_uid),
+        )
+        changed = cur.rowcount > 0
+        if changed:
+            detail = f"patient_id={normalized_patient_id}" if normalized_patient_id else "patient_id_cleared"
+            _write_audit(conn, record_uid, "patient_id_updated", detail)
         conn.commit()
 
     return changed

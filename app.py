@@ -26,6 +26,7 @@ pairs = input_ctx["pairs"]
 uploaded_files = input_ctx["uploaded_files"]
 run_btn = input_ctx["run_btn"]
 patient_id = input_ctx["patient_id"]
+batch_patient_id_map = input_ctx["batch_patient_id_map"]
 is_batch = input_ctx["is_batch"]
 
 with right:
@@ -38,6 +39,7 @@ with right:
             run_btn=run_btn,
             is_batch=is_batch,
             patient_id=patient_id,
+            batch_patient_id_map=batch_patient_id_map,
         )
 
     with tab_chatbot:

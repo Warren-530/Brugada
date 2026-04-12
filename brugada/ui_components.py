@@ -57,13 +57,13 @@ def inject_custom_css():
             [data-testid="stMetricValue"] {
                 font-size: 2.2rem !important;
                 font-weight: 700 !important;
-                color: #0f172a !important;
+                color: var(--text-color) !important;
                 text-align: center;
             }
             [data-testid="stMetricLabel"] {
                 font-size: 0.95rem !important;
                 font-weight: 600 !important;
-                color: #475569 !important;
+                color: color-mix(in srgb, var(--text-color) 78%, transparent) !important;
                 text-align: center;
                 justify-content: center;
             }
