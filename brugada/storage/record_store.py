@@ -107,6 +107,21 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+def _ensure_records_feedback_columns(conn: sqlite3.Connection) -> None:
+    rows = conn.execute("PRAGMA table_info(records)").fetchall()
+    existing_columns = {str(row["name"]) for row in rows}
+
+    migrations = [
+        ("doctor_feedback", "ALTER TABLE records ADD COLUMN doctor_feedback TEXT"),
+        ("doctor_feedback_note", "ALTER TABLE records ADD COLUMN doctor_feedback_note TEXT"),
+        ("doctor_feedback_at", "ALTER TABLE records ADD COLUMN doctor_feedback_at TEXT"),
+    ]
+
+    for column_name, statement in migrations:
+        if column_name not in existing_columns:
+            conn.execute(statement)
+
+
 def init_record_store() -> None:
     with _connect() as conn:
         conn.execute(
@@ -132,10 +147,14 @@ def init_record_store() -> None:
                 recommendation_tier TEXT,
                 recommendation_text TEXT,
                 evidence_summary TEXT,
+                doctor_feedback TEXT,
+                doctor_feedback_note TEXT,
+                doctor_feedback_at TEXT,
                 payload_path TEXT NOT NULL
             )
             """
         )
+        _ensure_records_feedback_columns(conn)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS audit_log (
@@ -150,6 +169,7 @@ def init_record_store() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_records_created ON records(created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_records_status ON records(status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_records_name ON records(record_name)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_records_feedback ON records(doctor_feedback)")
         conn.commit()
 
 
@@ -352,6 +372,9 @@ def list_records(status: str = "active", search: str = "", limit: int = 200) -> 
                 "recommendation_tier": row["recommendation_tier"] or "routine_clinical_correlation",
                 "recommendation_text": row["recommendation_text"] or "Clinical correlation is recommended.",
                 "evidence_summary": row["evidence_summary"] or "S0/M0/W0",
+                "doctor_feedback": (row["doctor_feedback"] or ""),
+                "doctor_feedback_note": (row["doctor_feedback_note"] or ""),
+                "doctor_feedback_at": (row["doctor_feedback_at"] or ""),
             }
         )
 
@@ -447,6 +470,67 @@ def update_record_patient_id(record_uid: str, patient_id: str | None) -> bool:
         if changed:
             detail = f"patient_id={normalized_patient_id}" if normalized_patient_id else "patient_id_cleared"
             _write_audit(conn, record_uid, "patient_id_updated", detail)
+        conn.commit()
+
+    return changed
+
+
+def update_record_feedback(record_uid: str, feedback: str | None, note: str | None = None) -> bool:
+    init_record_store()
+
+    feedback_value = (feedback or "").strip().lower()
+    if feedback_value == "":
+        feedback_value = None
+
+    if feedback_value not in {"agree", "disagree", None}:
+        raise ValueError("Feedback must be one of: agree, disagree, or empty")
+
+    note_value = (note or "").strip()
+    if not note_value:
+        note_value = None
+
+    feedback_at = _now_utc_iso() if feedback_value else None
+    now_iso = _now_utc_iso()
+
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            UPDATE records
+            SET doctor_feedback = ?, doctor_feedback_note = ?, doctor_feedback_at = ?, updated_at = ?
+            WHERE record_uid = ?
+            """,
+            (feedback_value, note_value, feedback_at, now_iso, record_uid),
+        )
+        changed = cur.rowcount > 0
+        if changed:
+            row = conn.execute(
+                "SELECT payload_path FROM records WHERE record_uid = ? LIMIT 1",
+                (record_uid,),
+            ).fetchone()
+            if row is not None:
+                payload_path = APP_ROOT / str(row["payload_path"])
+                if payload_path.exists():
+                    try:
+                        payload = json.loads(payload_path.read_text(encoding="utf-8"))
+                    except Exception:  # noqa: BLE001
+                        payload = {}
+                    if not isinstance(payload, dict):
+                        payload = {}
+
+                    payload["doctor_feedback"] = {
+                        "label": feedback_value,
+                        "note": note_value,
+                        "updated_at": feedback_at,
+                    }
+                    payload_path.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
+
+            if feedback_value:
+                detail = f"feedback={feedback_value}"
+                if note_value:
+                    detail += ";note_present=1"
+                _write_audit(conn, record_uid, "doctor_feedback_updated", detail)
+            else:
+                _write_audit(conn, record_uid, "doctor_feedback_cleared", "")
         conn.commit()
 
     return changed

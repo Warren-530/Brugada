@@ -5,6 +5,7 @@ from brugada.storage.record_store import (
     get_record_counts,
     get_record_payload,
     list_records,
+    update_record_feedback,
     update_record_patient_id,
     update_record_status_bulk,
 )
@@ -78,6 +79,8 @@ def render_records_tab():
             "timestamp_utc": records_df["created_at"],
             "record": records_df["record_name"],
             "patient_id": records_df["patient_id"],
+            "doctor_feedback": records_df["doctor_feedback"],
+            "doctor_feedback_note": records_df["doctor_feedback_note"],
             "label": records_df["label"],
             "risk_score_%": records_df["risk_score_pct"],
             "decision_stability_pp": records_df["boundary_distance_pp"],
@@ -170,6 +173,15 @@ def render_records_tab():
                 "select": st.column_config.CheckboxColumn("Select", help="Select one or more records for bulk actions."),
                 "record_uid": None,
                 "patient_id": st.column_config.TextColumn("patient_id", help="Editable patient identifier."),
+                "doctor_feedback": st.column_config.SelectboxColumn(
+                    "doctor_feedback",
+                    options=["", "agree", "disagree"],
+                    help="Doctor review label used for future model training.",
+                ),
+                "doctor_feedback_note": st.column_config.TextColumn(
+                    "doctor_feedback_note",
+                    help="Optional rationale supporting agree/disagree feedback.",
+                ),
             },
             disabled=[
                 "record_uid",
@@ -188,18 +200,38 @@ def render_records_tab():
             str(item["record_uid"]): str(item.get("patient_id", "") or "")
             for item in records
         }
+        original_feedback_by_uid = {
+            str(item["record_uid"]): str(item.get("doctor_feedback", "") or "")
+            for item in records
+        }
+        original_feedback_note_by_uid = {
+            str(item["record_uid"]): str(item.get("doctor_feedback_note", "") or "")
+            for item in records
+        }
         patient_changes: list[tuple[str, str]] = []
+        feedback_changes: list[tuple[str, str, str]] = []
         for _, row in edited_df.iterrows():
             row_uid = str(row["record_uid"])
             edited_patient_id = str(row.get("patient_id", "") or "").strip()
             if edited_patient_id != original_patient_by_uid.get(row_uid, ""):
                 patient_changes.append((row_uid, edited_patient_id))
 
+            edited_feedback = str(row.get("doctor_feedback", "") or "").strip().lower()
+            if edited_feedback not in {"agree", "disagree"}:
+                edited_feedback = ""
+            edited_feedback_note = str(row.get("doctor_feedback_note", "") or "").strip()
+
+            if (
+                edited_feedback != original_feedback_by_uid.get(row_uid, "")
+                or edited_feedback_note != original_feedback_note_by_uid.get(row_uid, "")
+            ):
+                feedback_changes.append((row_uid, edited_feedback, edited_feedback_note))
+
         selected_df = edited_df[edited_df["select"] == True]
         selected_uids = [str(uid) for uid in selected_df["record_uid"].tolist()]
         selected_items = [item for item in records if item["record_uid"] in selected_uids]
 
-        e1, e2 = st.columns([1, 2])
+        e1, e2, e3 = st.columns([1, 1, 2])
         with e1:
             if patient_changes:
                 if st.button("Save Patient ID Edits", use_container_width=True, key="records_save_patient_id"):
@@ -210,10 +242,25 @@ def render_records_tab():
                     st.session_state.persistence_notice = f"Updated patient_id for {updated_count} record(s)."
                     st.rerun()
         with e2:
+            if feedback_changes:
+                if st.button("Save Doctor Feedback", use_container_width=True, key="records_save_doctor_feedback"):
+                    updated_count = 0
+                    for row_uid, edited_feedback, edited_feedback_note in feedback_changes:
+                        if update_record_feedback(row_uid, edited_feedback, edited_feedback_note):
+                            updated_count += 1
+                    st.session_state.persistence_notice = f"Updated doctor feedback for {updated_count} record(s)."
+                    st.rerun()
+        with e3:
+            notices = []
             if patient_changes:
-                st.caption("Unsaved patient_id edits detected. Click Save Patient ID Edits to persist changes.")
+                notices.append("Unsaved patient_id edits detected.")
+            if feedback_changes:
+                notices.append("Unsaved doctor_feedback edits detected.")
+
+            if notices:
+                st.caption(" ".join(notices) + " Use the save buttons to persist changes.")
             else:
-                st.caption("Tip: edit patient_id directly in the table to enable Save Patient ID Edits.")
+                st.caption("Tip: edit patient_id and doctor_feedback fields directly in the table to enable save actions.")
 
         st.divider()
         a1, a2, a3, a4 = st.columns(4)
@@ -336,3 +383,5 @@ def render_records_tab():
             st.write(f"Recommendation Tier: {selected_item['recommendation_tier']}")
             st.write(f"Evidence Summary: {selected_item['evidence_summary']}")
             st.write(f"Recommendation: {selected_item['recommendation_text']}")
+            st.write(f"Doctor Feedback: {selected_item.get('doctor_feedback', '') or 'not set'}")
+            st.write(f"Doctor Feedback Note: {selected_item.get('doctor_feedback_note', '') or 'none'}")

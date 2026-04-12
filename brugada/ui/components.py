@@ -324,8 +324,38 @@ def _seconds_axis(length: int, fs: float) -> np.ndarray:
     return np.arange(length) / fs
 
 
+def _coerce_ecg_signal(signal) -> np.ndarray | None:
+    """Normalize ECG payloads loaded from JSON into a 2D NumPy array."""
+    if signal is None:
+        return None
+
+    try:
+        arr = np.asarray(signal, dtype=float)
+    except Exception:  # noqa: BLE001
+        return None
+
+    arr = np.squeeze(arr)
+    if arr.ndim == 1:
+        arr = arr[:, np.newaxis]
+    elif arr.ndim != 2:
+        return None
+
+    if arr.size == 0:
+        return None
+
+    # Some stored payloads may be lead-major; convert to sample-major.
+    if arr.shape[0] <= 12 and arr.shape[1] > arr.shape[0]:
+        arr = arr.T
+
+    return arr
+
+
 def _trim_trailing_quiet_tail(signal: np.ndarray, fs: float) -> np.ndarray:
     """Trim long low-energy tails (typically zero padding) for cleaner ECG display."""
+    signal = _coerce_ecg_signal(signal)
+    if signal is None:
+        return np.zeros((0, 0), dtype=float)
+
     if signal.ndim != 2 or signal.shape[0] < 10:
         return signal
 
@@ -346,7 +376,23 @@ def _trim_trailing_quiet_tail(signal: np.ndarray, fs: float) -> np.ndarray:
     return signal[:end_idx, :]
 
 def _plot_12_lead(signal: np.ndarray, lead_names: list[str], fs: float, highlights: dict[str, list[tuple[int, int]]]):
+    signal = _coerce_ecg_signal(signal)
+    if signal is None or signal.size == 0:
+        fig, ax = plt.subplots(figsize=(10, 2.6))
+        ax.axis("off")
+        ax.text(0.5, 0.5, "ECG signal unavailable for plotting.", ha="center", va="center", fontsize=11)
+        return fig
+
+    if fs <= 0:
+        fs = 500.0
+
     signal = _trim_trailing_quiet_tail(signal, fs)
+    if signal.size == 0 or signal.ndim != 2:
+        fig, ax = plt.subplots(figsize=(10, 2.6))
+        ax.axis("off")
+        ax.text(0.5, 0.5, "ECG signal unavailable for plotting.", ha="center", va="center", fontsize=11)
+        return fig
+
     n_samples, n_leads = signal.shape
     lead_names = (lead_names + DEFAULT_LEAD_NAMES)[:n_leads]
 

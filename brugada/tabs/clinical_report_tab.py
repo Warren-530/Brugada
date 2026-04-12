@@ -111,6 +111,41 @@ def render_clinical_report_tab(
         current_view = "Batch Summary"
         st.session_state.current_view = current_view
 
+    batch_results = st.session_state.get("batch_results")
+    if isinstance(batch_results, list) and batch_results:
+        record_views: list[str] = []
+        seen_records: set[str] = set()
+        for item in batch_results:
+            if not isinstance(item, dict):
+                continue
+            record_name = str(item.get("record", "")).strip()
+            if not record_name:
+                continue
+            if record_name in st.session_state.deleted_pairs:
+                continue
+            if record_name in seen_records:
+                continue
+            seen_records.add(record_name)
+            record_views.append(record_name)
+
+        if record_views:
+            view_options = ["Batch Summary", *record_views]
+            if current_view not in view_options:
+                current_view = "Batch Summary"
+                st.session_state.current_view = current_view
+
+            selected_view = st.selectbox(
+                "Batch record view",
+                options=view_options,
+                index=view_options.index(current_view),
+                key="clinical_report_batch_view_selector",
+                help="Switch between batch summary and individual record reports.",
+            )
+            if selected_view != current_view:
+                current_view = selected_view
+                st.session_state.current_view = current_view
+            st.caption("Choose a specific record to review details one by one.")
+
     single_result_to_show = None
     has_results = False
 
