@@ -164,7 +164,7 @@ def render_records_tab():
     with st.expander("Records Table, Patient ID Edits, and Bulk Actions", expanded=True):
         # Show sidebar patient_id status
         if sidebar_patient_id:
-            st.info(f"📋 **Current Patient ID from Optional Metadata**: `{sidebar_patient_id}` - Empty patient_id fields will use this value")
+            st.info(f"**Current Patient ID from Optional Metadata**: `{sidebar_patient_id}` - Empty patient_id fields will use this value")
         
         status_display = st.radio(
             "Status Filter",

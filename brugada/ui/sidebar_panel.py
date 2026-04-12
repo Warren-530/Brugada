@@ -153,7 +153,7 @@ def render_patient_input_panel(clear_uploads_cb) -> dict:
             only_stem = next(iter(pairs))
             if auto_extracted_ids:
                 extracted_id = auto_extracted_ids.get(only_stem, only_stem)
-                st.caption(f"✨ **Auto-Detected Patient ID**: `{extracted_id}` (from file metadata)")
+                st.caption(f"**Auto-Detected Patient ID**: `{extracted_id}` (from file metadata)")
             st.caption(f"Single record stem detected: {only_stem}. The Patient ID above applies to this record.")
         else:
             st.caption("Upload valid record pairs to map metadata by stem.")
