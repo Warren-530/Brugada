@@ -15,16 +15,27 @@ This tool supports triage and does not replace physician diagnosis.
 ## 2. What Is Included
 Core application files:
 - app.py: Streamlit application entry point and interaction flow
-- inference.py: Inference pipeline, model loading, feature extraction, decision logic
-- file_utils.py: Upload grouping, file handling, and batch prediction utilities
-- ui_components.py: Report components and visualization helpers
-- chatbot.py: Optional Gemini-based AI advisor integration
+- brugada/inference.py: Inference pipeline orchestration, model loading, feature extraction, and decision logic
+- brugada/inference_models.py: Model definitions, thresholds, and artifact loading cache
+- brugada/inference_features.py: Feature engineering and clinician explanation helpers
+- brugada/file_utils.py: Upload grouping, file handling, and batch prediction utilities
+- brugada/record_store.py: SQLite-backed persistence and record audit trail
+- brugada/ui_components.py: Report components and visualization helpers
+- brugada/chatbot.py: Optional Gemini-based AI advisor integration
 - models/: All deployed model artifacts required for inference
 - requirements.txt: Runtime dependency list
 
+Current project layout (high level):
+- app.py
+- brugada/
+- data/
+- models/
+- notebooks/
+- README.md
+
 Training documentation and notebook:
 - A dedicated training notebook exists in your project environment at:
-  - ../submit/Brugada_Model_Training_MultiU.ipynb
+  - notebooks/Brugada_Model_Training_MultiU.ipynb
 - This notebook is a full end-to-end training reference for the stacked architecture and artifact generation workflow.
 - It is a companion training document; the web app itself uses pre-trained artifacts in models/ for inference.
 
@@ -117,7 +128,7 @@ streamlit cache clear
 
 ## 9. New Training Notebook Section
 ### 9.1 File and Purpose
-The companion notebook ../submit/Brugada_Model_Training_MultiU.ipynb documents the training pipeline that produced the deployed artifacts.
+The companion notebook notebooks/Brugada_Model_Training_MultiU.ipynb documents the training pipeline that produced the deployed artifacts.
 
 Its purpose is to provide:
 - Reproducible training logic
@@ -284,7 +295,7 @@ Notebook evaluation performs threshold sweep and optimizes for F2-oriented behav
 
 Important distinction:
 - Training notebook demonstrates threshold optimization in one setting
-- Deployment in inference.py applies a clinically conservative threshold policy tuned for triage workflow
+- Deployment in brugada/inference.py applies a clinically conservative threshold policy tuned for triage workflow
 
 This is expected and deliberate. Training-time analysis and deployment-time clinical policy can differ.
 

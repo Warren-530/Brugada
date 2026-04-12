@@ -1,0 +1,1 @@
+"""Brugada application package."""
