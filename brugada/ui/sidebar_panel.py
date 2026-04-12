@@ -1,7 +1,7 @@
 import streamlit as st
 
 from brugada.file_utils import group_uploaded_files
-from brugada.ui_components import SVG_FOLDER, SVG_WARNING, get_status_indicator_svg
+from brugada.ui.components import SVG_FOLDER, SVG_WARNING, get_status_indicator_svg
 
 
 def render_patient_input_panel(clear_uploads_cb) -> dict:

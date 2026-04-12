@@ -1,7 +1,7 @@
 import streamlit as st
 
-from brugada.chatbot import BrugadaChatbot
-from brugada.record_store import init_record_store
+from brugada.services.chatbot import BrugadaChatbot
+from brugada.storage.record_store import init_record_store
 
 
 def ensure_app_state() -> None:

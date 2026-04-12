@@ -4,7 +4,7 @@ import numpy as np
 import pywt
 import scipy.stats as stats
 
-from brugada.inference_models import DECISION_THRESHOLD, DISPLAY_THRESHOLD
+from brugada.inference.models import DECISION_THRESHOLD, DISPLAY_THRESHOLD
 
 
 def _evidence_tier(score: float, segments: int, source: str) -> str:

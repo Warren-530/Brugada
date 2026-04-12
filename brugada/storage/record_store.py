@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-APP_ROOT = Path(__file__).resolve().parent.parent
+APP_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = APP_ROOT / "data"
 PAYLOAD_DIR = DATA_DIR / "records"
 DB_PATH = DATA_DIR / "brugada_records.db"

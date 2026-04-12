@@ -6,8 +6,8 @@ from brugada.app_tabs import (
     render_clinical_report_tab,
     render_records_tab,
 )
-from brugada.sidebar_panel import render_patient_input_panel
-from brugada.ui_components import inject_custom_css
+from brugada.ui.components import inject_custom_css
+from brugada.ui.sidebar_panel import render_patient_input_panel
 
 
 st.set_page_config(page_title="Brugada AI Assistant", page_icon="ECG", layout="wide")

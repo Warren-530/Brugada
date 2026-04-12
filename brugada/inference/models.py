@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import joblib
 import tensorflow as tf
@@ -7,6 +8,7 @@ from tensorflow.keras.layers import Dense, Layer, Reshape
 
 # Global model cache
 MODELS = {}
+APP_ROOT = Path(__file__).resolve().parents[2]
 
 FEATURE_LAYER_BY_MODEL = {
     "resnet": "nature_resnet_feature",
@@ -49,10 +51,10 @@ def load_all_models():
     custom_objs = {"LeadSpatialAttention": LeadSpatialAttention}
 
     model_files = {
-        "resnet": os.path.join("models", "extractor_resnet.keras"),
-        "blstm": os.path.join("models", "extractor_bilstm.keras"),
-        "eegnet": os.path.join("models", "extractor_eegnet.keras"),
-        "cwt_cnn": os.path.join("models", "extractor_cwt_cnn.keras"),
+        "resnet": str(APP_ROOT / "models" / "extractor_resnet.keras"),
+        "blstm": str(APP_ROOT / "models" / "extractor_bilstm.keras"),
+        "eegnet": str(APP_ROOT / "models" / "extractor_eegnet.keras"),
+        "cwt_cnn": str(APP_ROOT / "models" / "extractor_cwt_cnn.keras"),
     }
 
     for model_key, model_file in model_files.items():
@@ -96,9 +98,9 @@ def load_all_models():
 
     try:
         print("  Loading classifier models...")
-        MODELS["scaler"] = joblib.load(os.path.join("models", "brugada_scaler.pkl"))
-        MODELS["selector"] = joblib.load(os.path.join("models", "brugada_selector.pkl"))
-        MODELS["meta"] = joblib.load(os.path.join("models", "brugada_meta_learner.pkl"))
+        MODELS["scaler"] = joblib.load(APP_ROOT / "models" / "brugada_scaler.pkl")
+        MODELS["selector"] = joblib.load(APP_ROOT / "models" / "brugada_selector.pkl")
+        MODELS["meta"] = joblib.load(APP_ROOT / "models" / "brugada_meta_learner.pkl")
         print("    [OK] Scaler, selector, and meta-learner loaded successfully")
     except Exception as e:
         print(f"    [ERROR] Error loading classifier models: {str(e)}")

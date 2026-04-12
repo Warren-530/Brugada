@@ -4,14 +4,14 @@ import numpy as np
 import scipy.signal as signal
 import wfdb
 
-from brugada.inference_features import (
+from brugada.inference.features import (
     _build_clinician_explain,
     _build_explanation,
     extract_clinical_package,
     generate_cwt_scalograms,
     remap_probability_for_display,
 )
-from brugada.inference_models import (
+from brugada.inference.models import (
     DECISION_THRESHOLD,
     DISPLAY_THRESHOLD,
     MODELS,

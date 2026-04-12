@@ -1,7 +1,7 @@
 import tempfile
 from pathlib import Path
 
-from brugada.inference import predict_from_record
+from brugada.inference.pipeline import predict_from_record
 
 
 def _safe_int(value) -> int:
