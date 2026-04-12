@@ -29,6 +29,63 @@ def get_status_indicator_svg(is_detected: bool, is_urgent: bool = False, is_gray
 def inject_custom_css():
     st.markdown("""
         <style>
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+            /* Global Typography & Spacing */
+            html, body, [class*="css"] {
+                font-family: 'Inter', sans-serif;
+                line-height: 1.6;
+            }
+
+            /* Hide Streamlit Artifacts (Hamburger Menu, Footers, Deploy button) */
+            #MainMenu {visibility: hidden;}
+            footer {visibility: hidden;}
+            header {visibility: hidden;}
+            [data-testid="stHeader"] {display: none;}
+            
+            /* Custom Card Styling */
+            .custom-card {
+                background-color: #ffffff;
+                border-radius: 12px;
+                padding: 1.5rem;
+                box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+                border: 1px solid #e2e8f0;
+                margin-bottom: 1rem;
+            }
+
+            /* Streamlit Metrics Upgrade */
+            [data-testid="stMetricValue"] {
+                font-size: 2.2rem !important;
+                font-weight: 700 !important;
+                color: #0f172a !important;
+                text-align: center;
+            }
+            [data-testid="stMetricLabel"] {
+                font-size: 0.95rem !important;
+                font-weight: 600 !important;
+                color: #475569 !important;
+                text-align: center;
+                justify-content: center;
+            }
+            [data-testid="stMetricDelta"] {
+                justify-content: center;
+            }
+
+            /* Primary Button Modernization */
+            [data-testid="baseButton-primary"] {
+                border-radius: 8px !important;
+                font-weight: 600 !important;
+                letter-spacing: 0.3px;
+                padding: 0.5rem 1rem !important;
+                transition: all 0.2s ease-in-out !important;
+                box-shadow: 0 2px 4px rgba(37, 99, 235, 0.15) !important;
+            }
+            [data-testid="baseButton-primary"]:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25) !important;
+                filter: brightness(105%);
+            }
+
             /* Larger dashed dropzone for file uploader */
             [data-testid="stFileUploaderDropzone"] {
                 min-height: 200px;
@@ -107,6 +164,143 @@ def inject_custom_css():
                 font-weight: 500;
                 margin-left: 6px;
             }
+
+            .metric-tile {
+                background: rgba(255, 255, 255, 0.65);
+                border: 1px solid rgba(148, 163, 184, 0.32);
+                border-radius: 10px;
+                padding: 0.65rem 0.75rem;
+                min-height: 96px;
+            }
+
+            .metric-tile-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 0.5rem;
+                margin-bottom: 0.35rem;
+            }
+
+            .metric-tile-label {
+                color: #334155;
+                font-size: 0.92rem;
+                font-weight: 600;
+                line-height: 1.2;
+            }
+
+            .metric-info-icon {
+                color: #94a3b8;
+                font-size: 0.98rem;
+                font-weight: 700;
+                cursor: pointer;
+                line-height: 1;
+                user-select: none;
+            }
+
+            .metric-info-details {
+                position: relative;
+                display: inline-block;
+            }
+
+            .metric-info-details > summary {
+                list-style: none;
+                outline: none;
+            }
+
+            .metric-info-details > summary::-webkit-details-marker {
+                display: none;
+            }
+
+            .metric-info-details > summary:hover .metric-info-icon {
+                color: #64748b;
+            }
+
+            .metric-info-panel {
+                position: absolute;
+                top: 1.25rem;
+                right: 0;
+                z-index: 30;
+                width: 280px;
+                max-width: min(280px, 42vw);
+                background: #f8fafc;
+                border: 1px solid rgba(148, 163, 184, 0.45);
+                border-radius: 10px;
+                box-shadow: 0 12px 24px rgba(15, 23, 42, 0.16);
+                padding: 0.6rem 0.7rem;
+                color: #334155;
+                font-size: 0.78rem;
+                font-weight: 500;
+                line-height: 1.35;
+                text-align: left;
+            }
+
+            .metric-info-panel-title {
+                color: #0f172a;
+                font-size: 0.76rem;
+                font-weight: 700;
+                letter-spacing: 0.2px;
+                margin-bottom: 0.35rem;
+            }
+
+            .metric-tile-value {
+                color: #0f172a;
+                font-size: 2.05rem;
+                font-weight: 700;
+                line-height: 1.05;
+                letter-spacing: 0.2px;
+            }
+
+            .decision-legend-panel {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.6rem 1rem;
+                padding: 0.55rem 0.7rem;
+                margin-bottom: 0.55rem;
+                border: 1px solid rgba(148, 163, 184, 0.35);
+                border-radius: 9px;
+                background: rgba(248, 250, 252, 0.85);
+            }
+
+            .decision-legend-item {
+                display: inline-flex;
+                align-items: center;
+                gap: 0.45rem;
+                color: #334155;
+                font-size: 0.78rem;
+                font-weight: 600;
+            }
+
+            .decision-legend-swatch {
+                width: 15px;
+                height: 11px;
+                border-radius: 3px;
+                border: 1px solid rgba(15, 23, 42, 0.12);
+            }
+
+            .decision-legend-swatch-below {
+                background: #dcfce7;
+            }
+
+            .decision-legend-swatch-above {
+                background: #fee2e2;
+            }
+
+            .decision-legend-swatch-gray {
+                background: #fef3c7;
+            }
+
+            .decision-legend-line {
+                width: 18px;
+                border-top: 2px dashed #16a34a;
+            }
+
+            .decision-legend-dot {
+                width: 10px;
+                height: 10px;
+                border-radius: 999px;
+                background: #dc2626;
+                display: inline-block;
+            }
         </style>
     """, unsafe_allow_html=True)
 
@@ -129,13 +323,37 @@ DEFAULT_LEAD_NAMES = [
 def _seconds_axis(length: int, fs: float) -> np.ndarray:
     return np.arange(length) / fs
 
+
+def _trim_trailing_quiet_tail(signal: np.ndarray, fs: float) -> np.ndarray:
+    """Trim long low-energy tails (typically zero padding) for cleaner ECG display."""
+    if signal.ndim != 2 or signal.shape[0] < 10:
+        return signal
+
+    envelope = np.max(np.abs(signal), axis=1)
+    peak = float(np.max(envelope))
+    if peak <= 0.0:
+        return signal
+
+    active_threshold = max(peak * 0.01, 1e-6)
+    active_indices = np.where(envelope > active_threshold)[0]
+    if active_indices.size == 0:
+        return signal
+
+    last_active = int(active_indices[-1])
+    safety_tail = max(1, int(fs * 0.25))
+    min_keep = min(signal.shape[0], max(200, int(fs * 1.5)))
+    end_idx = min(signal.shape[0], max(last_active + safety_tail, min_keep))
+    return signal[:end_idx, :]
+
 def _plot_12_lead(signal: np.ndarray, lead_names: list[str], fs: float, highlights: dict[str, list[tuple[int, int]]]):
+    signal = _trim_trailing_quiet_tail(signal, fs)
     n_samples, n_leads = signal.shape
     lead_names = (lead_names + DEFAULT_LEAD_NAMES)[:n_leads]
 
     fig, axes = plt.subplots(6, 2, figsize=(14, 12), sharex=True)
     axes = axes.ravel()
     t = _seconds_axis(n_samples, fs)
+    max_time = t[-1] if n_samples > 1 else (1.0 / fs)
 
     for i in range(min(12, n_leads)):
         ax = axes[i]
@@ -146,7 +364,10 @@ def _plot_12_lead(signal: np.ndarray, lead_names: list[str], fs: float, highligh
 
         if lead in {"V1", "V2", "V3"} and lead in highlights:
             for start, end in highlights[lead]:
-                ax.axvspan(start / fs, end / fs, color="#EF4444", alpha=0.22)
+                start_t = max(0.0, start / fs)
+                end_t = min(max_time, end / fs)
+                if end_t > start_t:
+                    ax.axvspan(start_t, end_t, color="#EF4444", alpha=0.22)
 
     for j in range(min(12, n_leads), 12):
         axes[j].axis("off")
@@ -158,21 +379,50 @@ def _plot_12_lead(signal: np.ndarray, lead_names: list[str], fs: float, highligh
     return fig
 
 
-def _plot_decision_margin(probability: float, threshold: float):
-    fig, ax = plt.subplots(figsize=(8.0, 1.8))
-    gray_upper = min(1.0, threshold + 0.01)
-    ax.axvspan(0.0, threshold, color="#DCFCE7", alpha=0.9, label="Below threshold")
-    ax.axvspan(threshold, 1.0, color="#FEE2E2", alpha=0.60, label="Above threshold")
-    ax.axvspan(threshold, gray_upper, color="#FEF3C7", alpha=0.95, label="Borderline-positive zone")
-    ax.axvline(threshold, color="#16A34A", linewidth=2.0, linestyle="--", label=f"Threshold {threshold:.3f}")
-    ax.scatter([probability], [0.5], color="#DC2626", s=90, zorder=5, label=f"Prediction {probability:.3f}")
+def _render_decision_margin_legend(probability: float, threshold: float):
+    st.markdown(
+        f"""
+        <div class="decision-legend-panel">
+            <div class="decision-legend-item">
+                <span class="decision-legend-swatch decision-legend-swatch-below"></span>
+                <span>Below decision boundary</span>
+            </div>
+            <div class="decision-legend-item">
+                <span class="decision-legend-swatch decision-legend-swatch-above"></span>
+                <span>Above decision boundary</span>
+            </div>
+            <div class="decision-legend-item">
+                <span class="decision-legend-swatch decision-legend-swatch-gray"></span>
+                <span>Near-boundary review zone</span>
+            </div>
+            <div class="decision-legend-item">
+                <span class="decision-legend-line"></span>
+                <span>Threshold {threshold:.3f}</span>
+            </div>
+            <div class="decision-legend-item">
+                <span class="decision-legend-dot"></span>
+                <span>Score {probability:.3f}</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _plot_decision_margin(probability: float, threshold: float, gray_zone_upper: float | None = None):
+    fig, ax = plt.subplots(figsize=(9.0, 2.6))
+    gray_upper = min(1.0, gray_zone_upper if gray_zone_upper is not None else (threshold + 0.01))
+    ax.axvspan(0.0, threshold, color="#DCFCE7", alpha=0.9)
+    ax.axvspan(threshold, 1.0, color="#FEE2E2", alpha=0.60)
+    ax.axvspan(threshold, gray_upper, color="#FEF3C7", alpha=0.95)
+    ax.axvline(threshold, color="#16A34A", linewidth=2.0, linestyle="--")
+    ax.scatter([probability], [0.5], color="#DC2626", s=90, zorder=5)
     ax.set_xlim(0.0, 1.0)
     ax.set_ylim(0.0, 1.0)
     ax.set_yticks([])
-    ax.set_xlabel("Brugada probability")
-    ax.set_title("Decision Margin View")
+    ax.set_xlabel("Displayed risk score")
+    ax.set_title("Decision Boundary View", pad=10)
     ax.grid(alpha=0.2, axis="x")
-    ax.legend(loc="upper right", fontsize=8)
     fig.tight_layout()
     return fig
 

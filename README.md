@@ -1,286 +1,360 @@
 # Brugada Syndrome Clinical AI Assistant
 
-## 1. Project Overview
-This project is a clinical decision-support web application for Brugada syndrome risk triage from 12-lead ECG WFDB records.
+## 1. Project Summary
+This project is a Streamlit-based clinical decision-support application for Brugada syndrome triage from 12-lead ECG WFDB records.
 
-It combines:
+The current application is designed for high-sensitivity screening support and clinician workflow prioritization. It combines:
 - Multi-view deep feature extraction
-- Handcrafted clinical morphology/statistical features
-- A classical meta-learner stack on top of selected features
-- A Streamlit reporting layer with evidence visualization and triage-oriented recommendations
+- Handcrafted statistical and morphology features
+- Feature standardization and selection
+- A trained ensemble meta-learner for final risk estimation
+- Clinician-oriented report generation
 
-The application is designed for high-recall triage behavior and explicit physician-facing explanations. It supports single-record diagnosis and batch queue prioritization.
+This tool supports triage and does not replace physician diagnosis.
 
-Important note: this tool supports triage and workflow prioritization. It does not replace physician diagnosis.
+## 2. What Is Included
+Core application files:
+- app.py: Streamlit application entry point and interaction flow
+- inference.py: Inference pipeline, model loading, feature extraction, decision logic
+- file_utils.py: Upload grouping, file handling, and batch prediction utilities
+- ui_components.py: Report components and visualization helpers
+- chatbot.py: Optional Gemini-based AI advisor integration
+- models/: All deployed model artifacts required for inference
+- requirements.txt: Runtime dependency list
 
-## 2. Environment Setup and First Run
+Training documentation and notebook:
+- A dedicated training notebook exists in your project environment at:
+  - ../submit/Brugada_Model_Training_MultiU.ipynb
+- This notebook is a full end-to-end training reference for the stacked architecture and artifact generation workflow.
+- It is a companion training document; the web app itself uses pre-trained artifacts in models/ for inference.
 
-**Prerequisites**: Python 3.12 recommended, latest `pip`, and Git installed.
+## 3. System Requirements
+- Python 3.12
+- Git
+- Internet access for first-time dependency installation
+- Sufficient memory for TensorFlow model loading and CWT processing
 
-### 2.1 Setup and Dependency Installation
-Run these commands in PowerShell (Windows) to clone the repository, create a virtual environment, and install all dependencies:
+## 4. First-Time Setup After Cloning
+Use this once on a new machine.
 
+### 4.1 Windows PowerShell
 ```powershell
-# 1. Clone & Enter Project
 git clone https://github.com/Warren-530/Brugada.git
 cd Brugada
 
-# 2. Create & Activate Virtual Environment
 python -m venv .venv
-
-# Note: If execution policy blocks activation, use:
-# Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\.venv\Scripts\Activate.ps1
 
-# 3. Install Dependencies
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
-*(Note: `requirements.txt` includes TensorFlow, scikit-learn, and `google-genai` for the AI Chatbot feature).*
 
-
-
-### 2.2 Verify Core Model Files
-Confirm these files are present in the `models/` directory before running:
-- `extractor_resnet.keras`
-- `extractor_eegnet.keras`
-- `extractor_bilstm.keras`
-- `extractor_cwt_cnn.keras`
-- `brugada_scaler.pkl`
-- `brugada_selector.pkl`
-- `brugada_meta_learner.pkl`
-
-### 2.3 Set up Gemini API key (For Optional AI Chatbot)
-The app runs locally without an API key, but to enable the AI Clinical Advisor chatbot powered by `google-genai`, you need a Gemini API key:
-1. Go to [Google AI Studio](https://aistudio.google.com/apikey) and create a key
-2. Save it in `.streamlit/secrets.toml` within the Brugada folder:
-   ```toml
-   GEMINI_API_KEY = "your-api-key-here"
-   ```
-   *Alternatively, set the environment variable in PowerShell: `$env:GEMINI_API_KEY = "your-api-key-here"`*
-
-### 2.4 Start Web App
-Run the Streamlit application:
+If script execution is blocked:
 ```powershell
-python -m streamlit run app.py
-```
-After running, open the local URL shown (e.g., `http://localhost:8501`).
-
-## 3. Routine Daily Run (Environment Already Set)
-If setup is already done and dependencies are installed:
-
-### 3.1 Open project and activate venv
-
-```powershell
-cd Brugada
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\.venv\Scripts\Activate.ps1
 ```
 
-### 3.2 Optional cache clear
-Use this if you suspect stale Streamlit state:
+### 4.2 macOS or Linux
+```bash
+git clone https://github.com/Warren-530/Brugada.git
+cd Brugada
 
+python3 -m venv .venv
+source .venv/bin/activate
+
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+## 5. Verify Required Inference Artifacts
+Before starting the app, confirm these files exist in models/:
+- extractor_resnet.keras
+- extractor_eegnet.keras
+- extractor_bilstm.keras
+- extractor_cwt_cnn.keras
+- brugada_scaler.pkl
+- brugada_selector.pkl
+- brugada_meta_learner.pkl
+
+If these files are missing, inference cannot run.
+
+## 6. Run the Application
+Start Streamlit:
+
+```powershell
+python -m streamlit run app.py
+```
+
+Then open the local URL shown in the console, typically http://localhost:8501.
+
+## 7. Daily Run Workflow
+After first-time setup, use this standard startup sequence.
+
+### 7.1 Windows PowerShell
+```powershell
+cd Brugada
+.\.venv\Scripts\Activate.ps1
+python -m streamlit run app.py
+```
+
+### 7.2 macOS or Linux
+```bash
+cd Brugada
+source .venv/bin/activate
+python -m streamlit run app.py
+```
+
+Optional cache reset if state appears stale:
 ```powershell
 streamlit cache clear
 ```
 
-### 3.3 Run app
+## 8. Input Data Requirements
+- Upload paired WFDB files: one .hea and one .dat per record
+- Base names must match, for example 100.hea and 100.dat
+- Data is expected to be compatible with 12-lead ECG assumptions in preprocessing
 
-```powershell
-python -m streamlit run app.py
-```
+## 9. New Training Notebook Section
+### 9.1 File and Purpose
+The companion notebook ../submit/Brugada_Model_Training_MultiU.ipynb documents the training pipeline that produced the deployed artifacts.
 
-### 3.4 Use the app
-Single-record mode:
-- Upload matched `.hea` and `.dat`
-- Click Run Diagnosis
-- Review risk metrics, recommendation, and evidence
+Its purpose is to provide:
+- Reproducible training logic
+- Architecture design details
+- Out-of-fold feature extraction strategy
+- Ensemble assembly and threshold optimization process
+- Artifact generation steps for deployment
 
-Batch mode:
-- Upload multiple `.hea` and `.dat`
-- Click Run Batch Risk List
-- Review tiered queues and discordant cases first
+### 9.2 What the Notebook Contains
+The notebook is structured as phased pipeline blocks:
+- Phase 1: Raw data loading and preprocessing
+- Phase 2: Statistical, expert morphology, and CWT view generation
+- Phase 3: Deep model definitions and strict OOF latent extraction
+- Phase 4: Feature stacking, selection, and cost-sensitive meta-learning
+- Phase 5: Artifact export for deployment
+- Phase 5A and 5B and 6: uncertainty analysis and explainability visualizations
 
-## 4. Repository Contents
-- `app.py`: Streamlit web interface and report rendering
-- `chatbot.py`: AI Clinical Advisor chatbot integration
-- `file_utils.py`: WFDB file loading and preprocessing utilities
-- `inference.py`: End-to-end inference pipeline, feature extraction, recommendation logic
-- `ui_components.py`: Streamlit UI components and layout helpers
-- `requirements.txt`: Python dependencies (includes TensorFlow, scikit-learn, google-genai for AI chatbot)
-- `models/`: Directory containing all trained models, selectors, and scalers:
-  - `extractor_resnet.keras`: 1D ResNet feature extractor
-  - `extractor_eegnet.keras`: EEGNet-style feature extractor
-  - `extractor_bilstm.keras`: Attention-BiLSTM feature extractor
-  - `extractor_cwt_cnn.keras`: CWT-CNN feature extractor
-  - `brugada_scaler.pkl`: StandardScaler fitted on training data
-  - `brugada_selector.pkl`: Feature selector fitted on training data
-  - `brugada_meta_learner.pkl`: Trained meta-learner for final risk probability
+### 9.3 Why It Matters to This Repository
+The notebook explains how model artifacts were trained, while the app executes a fixed inference-only version of that logic for fast and stable deployment.
 
-## 5. Model Architecture and Inference Pipeline
-The deployed pipeline in `inference.py` follows this sequence:
+In short:
+- Notebook: training and experimentation reference
+- Web app: production-style inference and reporting path
 
-1. WFDB loading and preprocessing
-- Input format: paired `.hea` and `.dat`
-- Bandpass filter: 0.5 to 40 Hz, order 3 Butterworth
-- Sequence length normalization: truncate or zero-pad to 1200 samples
+## 10. Detailed Model Explanation
+This section explains the full modeling strategy in depth, including design rationale, data flow, and deployment implications.
 
-2. Multi-view feature extraction
-- Deep latent features from 4 extractors (32 dimensions each):
-  - 1D ResNet latent feature
-  - EEGNet latent feature
-  - Attention-BiLSTM latent feature
-  - CWT-CNN latent feature (from V1 to V3 scalograms)
-- Clinical handcrafted features:
-  - 84 statistical time-domain features (7 per lead over 12 leads)
-  - 9 expert morphology features from V1 to V3 (J height, ST slope, curvature)
+### 10.1 Problem Setting and Design Constraints
+Brugada ECG classification in this project is treated as a high-dimensional, low-sample-size problem:
+- Raw ECG contains rich temporal structure and lead interactions
+- Pathology signatures can be subtle and localized, especially in right precordial leads V1 to V3
+- Dataset size constraints increase overfitting risk for deep models
+- Pure end-to-end deep classification can become unstable with small cohorts
 
-3. Feature assembly
-- Concatenation order is strict:
-  - Statistical 84
-  - Expert 9
-  - ResNet 32
-  - EEGNet 32
-  - BiLSTM 32
-  - CWT-CNN 32
+To address these constraints, the project uses a hybrid architecture:
+- Learn multiple latent representations with specialized deep models
+- Combine these with handcrafted domain features
+- Train a classical ensemble meta-learner on top of stacked features
+- Use out-of-fold extraction to reduce leakage in stacking
+
+### 10.2 End-to-End Pipeline View
+At a high level, the model pipeline follows this sequence:
+1. Load WFDB signal and metadata labels
+2. Denoise and length-normalize ECG waveforms
+3. Build multiple feature views
+4. Extract deep latent features via OOF strategy
+5. Concatenate handcrafted and deep features
+6. Standardize and select informative dimensions
+7. Train cost-sensitive ensemble meta-learner
+8. Tune threshold with F2-oriented objective
+9. Export scaler, selector, and models for deployment
+
+### 10.3 Phase 1: Signal Preprocessing
+The notebook performs the same conceptual preprocessing later mirrored in deployment:
+- Band-pass filter using Butterworth design in a clinically relevant frequency range
+- Sequence normalization to fixed length 1200 by truncation or zero-padding
+- Stratified train-test split before feature extraction to preserve class distribution and reduce leakage
+
+Why this is important:
+- Fixed length is required by neural feature extractors
+- Filtering suppresses baseline drift and high-frequency artifacts
+- Stratification stabilizes minority-class evaluation
+
+### 10.4 Phase 2A: Statistical Feature View
+The statistical branch generates 84 handcrafted features:
+- 12 leads x 7 statistics per lead
+- Typical descriptors: max, min, standard deviation, variance, skewness, kurtosis, RMS
+
+Role in the system:
+- Captures broad waveform distribution shape across all leads
+- Provides robust baseline descriptors independent of deep latent space
+- Improves complementarity for stacked learning
+
+### 10.5 Phase 2B: Expert Morphology Feature View
+The morphology branch focuses on V1 to V3 and extracts 9 features total:
+- For each of V1, V2, V3:
+  - J-point height proxy
+  - ST slope proxy
+  - Curvature proxy
+
+Rationale:
+- Brugada-related signatures are commonly emphasized in right precordial leads
+- Explicit morphology features introduce clinically interpretable constraints
+- This branch supports both classification and report explanation layers
+
+### 10.6 Phase 2C: Frequency View Through CWT
+The frequency branch converts V1 to V3 waveforms to CWT scalograms:
+- Continuous Wavelet Transform across scales
+- Resized image-like representation per selected lead
+- Input to 2D-CNN feature extractor
+
+Rationale:
+- Captures time-frequency patterns not explicit in time-only representations
+- Sensitive to localized transient energy structures
+- Complements pure temporal feature encoders
+
+### 10.7 Phase 3: Deep Feature Extractors
+Four deep models are used to learn complementary latent embeddings, each producing 32-dimensional features:
+- 1D ResNet-style extractor for morphology-rich local patterns
+- EEGNet-style separable-convolution extractor for compact temporal channel interactions
+- Attention-BiLSTM extractor for temporal sequence dependencies
+- CWT-CNN extractor for image-like time-frequency signatures
+
+Key shared ideas:
+- Lead-aware processing via attention-like mechanisms in temporal branches
+- Dropout and normalization for regularization
+- Latent layer extraction instead of end classifier logits for stacking
+
+### 10.8 Out-of-Fold Latent Feature Generation
+The notebook uses strict 5-fold OOF extraction for deep latent vectors:
+- For each fold, train on fold-train and predict latent features on fold-validation
+- Assemble OOF latent matrix for full training set without same-sample fit leakage
+- Predict test latent features per fold and average across folds
+
+Why OOF matters:
+- Prevents optimistic leakage in second-level learner
+- Reduces meta-learner overconfidence
+- More realistic estimate of generalization behavior
+
+### 10.9 Data Augmentation Strategy
+During deep feature training, the notebook includes augmentation mechanisms such as:
+- Physical signal augmentation (scale and baseline perturbation)
+- Mixup to regularize decision boundaries
+
+Expected effect:
+- Improve robustness under small-sample variability
+- Reduce sensitivity to minor acquisition differences
+
+### 10.10 Feature Stacking Geometry
+The full stacked vector is assembled in fixed order:
+- Statistical features: 84
+- Expert morphology features: 9
+- Deep latent features: 32 x 4 = 128
 - Total: 221 dimensions
 
-4. Classical ML post-processing
-- Standardization with saved scaler
-- Feature selection with saved selector
-- Final probability from saved meta-learner
+This ordering consistency is important because scaler and selector artifacts are trained on this exact schema.
 
-5. Decision policy
-- Decision threshold: 0.05
-- Borderline-positive zone: [0.05, 0.06]
-- Output includes:
-  - Brugada risk probability
-  - Decision confidence (derived from threshold margin)
-  - Threshold distance (percentage points from threshold)
-  - Predicted-class support
-  - Evidence table and recommendation tier
+### 10.11 Standardization and Feature Selection
+Post-stacking transformation uses:
+- StandardScaler on the full 221-dimensional space
+- Model-based feature selection to keep the most informative subset
 
-## 6. Training Method Summary
-Training was performed in a separate notebook workflow (artifact generation already completed and included in this folder as `.keras` and `.pkl` files).
+Benefits:
+- Controls feature scale differences across handcrafted and deep embeddings
+- Reduces noise and dimensionality burden for final ensemble
+- Improves stability in limited-data setting
 
-High-level training strategy:
-- ECG preprocessing with the same filtering and length normalization policy
-- Multi-view representation learning
-- Strict out-of-fold deep feature extraction to reduce leakage in stacked learning
-- Feature selection on concatenated feature space
-- Meta-learning with a soft-voting/stacking style ensemble of classical models
-- Threshold scanning and clinical uncertainty analysis during evaluation
+### 10.12 Meta-Learner Design
+The final layer is a cost-sensitive ensemble strategy combining multiple classical learners:
+- XGBoost
+- LightGBM
+- CatBoost
+- RBF-kernel SVM
 
-Deployed artifacts in the `models/` directory are already trained and ready for inference.
+Stacking with a logistic regression final estimator (class balancing enabled) is used to combine these learners.
 
-## 7. Explainability and Clinical Reporting
-The web report provides:
-- 12-lead ECG visualization with V1 to V3 highlighted windows in relevant cases
-- Decision margin chart showing threshold and borderline-positive zone
-- V1 to V3 morphology evidence table and heatmap
-- Per-lead evidence summaries:
-  - Evidence Strength: strong, moderate, weak
-  - Extraction Reliability: good, fair, poor
-- Deep-view contribution share (descriptive, not causal attribution)
-- Recommendation tier and actionable checklist
-- Batch triage queues:
-  - Urgent Review Queue
-  - Gray-Zone Priority Queue
-  - Discordant Cases Queue
+Why this design works well in this context:
+- Different tree and kernel models capture different nonlinear boundaries
+- Classical learners can exploit curated latent spaces effectively
+- Cost-sensitive weighting helps preserve minority-class recall
 
-## 8. Web Logic Summary
-Single-record output logic is designed to be explicit:
-- Risk status from model probability and threshold policy
-- Borderline protocol card appears for borderline cases or near-threshold distance
-- Discordance warning appears when model-level decision and morphology strength diverge
-- Recommendation banner is tier-driven and consistent with backend policy
+### 10.13 Threshold Optimization Strategy
+Notebook evaluation performs threshold sweep and optimizes for F2-oriented behavior, prioritizing recall for positive pathological cases.
 
-Batch logic:
-- Prioritization order is recommendation tier first, then probability, then decision stability
-- Batch schema includes recommendation tier and discordance flag to support review workflow
+Important distinction:
+- Training notebook demonstrates threshold optimization in one setting
+- Deployment in inference.py applies a clinically conservative threshold policy tuned for triage workflow
 
-## 9. Is the Current Version Enough?
-For demo and competition-oriented deployment, this implementation is strong and coherent.
+This is expected and deliberate. Training-time analysis and deployment-time clinical policy can differ.
 
-For production-like clinical deployment, additional work is recommended:
-- Prospective validation and calibration by site/population
-- Governance around threshold policy and escalation pathway
-- Data quality controls and audit logging
-- Regulatory, legal, and safety review
+### 10.14 Exported Artifacts and Their Roles
+Artifact export in training produces the deployment assets:
+- brugada_scaler.pkl: feature standardization transform
+- brugada_selector.pkl: feature selection transform
+- brugada_meta_learner.pkl: final classifier
+- extractor_resnet.keras: deep latent model 1
+- extractor_eegnet.keras: deep latent model 2
+- extractor_bilstm.keras: deep latent model 3
+- extractor_cwt_cnn.keras: deep latent model 4
 
-## 10. Input Data Requirements
-- Input records must be valid WFDB pairs (`.hea` with matching `.dat`)
-- Record base names must match (for example, `100.hea` with `100.dat`)
-- Signal should be 12-lead ECG compatible with the preprocessing assumptions
+The app loads these artifacts during startup and runs deterministic inference with no retraining in production flow.
 
-## 11. Output Field Semantics
-Key report metrics:
-- Brugada Risk Probability: model-estimated probability for Brugada class
-- Threshold Distance: absolute distance from decision threshold in percentage points
-- Decision Confidence (derived): normalized transform of threshold margin for quick readability
-- Predicted-Class Support: posterior support for assigned class label
+### 10.15 Inference-Time Reporting and Explainability
+The deployed app augments raw prediction with clinician-facing context:
+- Risk probability and threshold-relative interpretation
+- Morphology evidence summaries focused on V1 to V3
+- Decision stability and borderline handling logic
+- Recommendation tiers and next-action guidance
 
-Evidence semantics:
-- Evidence Strength indicates morphology support level
-- Extraction Reliability indicates robustness of delineation process, not disease severity
+This layer is not only for visualization; it is designed to support triage prioritization and safer handoff to physician review.
+
+### 10.16 Why This Hybrid Architecture Is Appropriate
+Compared with single-model alternatives, this architecture provides:
+- Better representation diversity
+- Lower leakage risk in stacked training
+- More resilient behavior in HDLSS constraints
+- Better practical interpretability through explicit morphology channels
+- Flexible deployment with fixed reusable artifacts
+
+### 10.17 Limitations and Responsible Use
+Even with strong engineering choices, limitations remain:
+- Dataset and cohort shift can reduce external generalization
+- Morphology proxies are heuristic and not equivalent to full electrophysiology interpretation
+- Explainability summaries are supportive signals, not causal proof
+- Clinical context, physician judgment, and additional tests remain mandatory
+
+## 11. Optional Gemini API Configuration
+The app can run without chatbot features. Configure only if needed.
+
+Option 1: .streamlit/secrets.toml
+```toml
+GEMINI_API_KEY = "your-api-key"
+```
+
+Option 2: environment variable in PowerShell
+```powershell
+$env:GEMINI_API_KEY = "your-api-key"
+```
 
 ## 12. Troubleshooting
-### 12.1 ImportError or ModuleNotFoundError
-If you see errors like "No module named X":
-- Ensure virtual environment is activated: `.\.venv\Scripts\Activate.ps1`
-- Reinstall dependencies: `pip install -r requirements.txt`
-- Verify the venv interpreter is selected in your editor
-
-### 12.2 Model Deserialization Error (TypeError with Functional/LeadSpatialAttention)
-This error occurs when TensorFlow version is incompatible with saved `.keras` models:
-
-```
-TypeError: Could not deserialize class 'Functional' because its parent module keras.src.models.functional cannot be imported
+### 12.1 Missing Python Modules
+```powershell
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
 ```
 
-**Solution:**
-1. Verify TensorFlow version: `python -c "import tensorflow; print(tensorflow.__version__)"`
-2. If not 2.21.0, reinstall the correct version:
-   ```powershell
-   pip uninstall tensorflow -y
-   pip install tensorflow==2.21.0
-   ```
-3. Optionally clear Keras cache:
-   ```powershell
-   python -c "import shutil, os; shutil.rmtree(os.path.expanduser('~/.keras'), ignore_errors=True)"
-   ```
-4. Restart the Streamlit app: `python -m streamlit run app.py`
+### 12.2 TensorFlow or Keras Load Errors
+```powershell
+python -c "import tensorflow as tf; print(tf.__version__)"
+pip install -r requirements.txt --force-reinstall
+```
 
-### 12.3 Import warnings in editor
-If your editor reports unresolved imports for tensorflow, cv2, pywt, or neurokit2:
-- Ensure the selected Python interpreter is the project venv
-- Reinstall dependencies in that venv
-- Restart VS Code Python language server if needed
+### 12.3 App Starts but Prediction Fails
+Check the following:
+- All files in models/ exist
+- Uploaded records include both .hea and .dat files
+- Filenames are correctly paired
 
-### 12.4 Streamlit starts but inference fails
-- Verify all `.keras` and `.pkl` artifact files are present in the `models/` directory
-- Ensure uploaded input includes both `.hea` and `.dat`
-- Check file naming consistency for WFDB pair
-
-### 12.5 Performance issues on CPU
-- First inference may be slow due to model loading
-- Keep app session running to reuse loaded models
-
-### 12.6 Chatbot unavailable / API key errors
-- Ensure GEMINI_API_KEY is set either in `.streamlit/secrets.toml` or as an environment variable
-- The chatbot is optional; the app works without it if no API key is configured
-- If quota is exceeded (429 error), the app shows a fallback clinical note
-
-## 13. Known Limitations
-- Evidence strength/reliability logic is heuristic and should be interpreted with clinical context
-- Deep-view contribution chart is descriptive, not causal model attribution
-- Threshold policy is intentionally recall-oriented and may increase false positives
-- The tool is not a substitute for cardiologist interpretation or formal diagnosis
-
-## 14. Potential Improvements
-- Report export (PDF/CSV) for clinician handoff
-- Additional data-quality checks before inference
-- Configurable threshold policy profiles (screening, balanced, rule-out)
-- External validation dashboard and calibration metrics
-
-## 15. Clinical Disclaimer
-This software is for decision support and research workflow assistance. It does not provide a definitive diagnosis and must be used with qualified clinical judgment.
+## 13. Clinical Disclaimer
+This software is intended for decision support and triage workflow assistance. It does not provide definitive diagnosis. Final interpretation must be performed by qualified clinicians within appropriate clinical context.

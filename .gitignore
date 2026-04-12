@@ -28,3 +28,7 @@ Thumbs.db
 .env
 .env.*
 .streamlit/secrets.toml
+
+# Local records center storage
+data/*.db
+data/records/*.json

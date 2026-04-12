@@ -61,18 +61,24 @@ def _predict_batch_from_folder(folder_path: Path) -> list[dict]:
         try:
             pred = predict_from_record(str(base))
             if isinstance(pred, dict):
-                probability = float(pred.get("probability", 0.0))
+                probability_raw = float(pred.get("probability", 0.0))
+                probability = float(pred.get("display_probability", probability_raw))
                 label = pred.get("label", "Unknown")
-                stability = float(pred.get("decision_stability", 0.0))
+                stability_raw = float(pred.get("decision_stability", 0.0))
+                stability = float(pred.get("display_decision_stability", stability_raw))
                 gray_zone = bool(pred.get("gray_zone", False))
-                decision_threshold = float(pred.get("decision_threshold", 0.05))
+                decision_threshold_raw = float(pred.get("decision_threshold", 0.05))
+                decision_threshold = float(pred.get("display_threshold", 0.35))
                 clinician_explain = _normalize_clinician_explain(pred.get("clinician_explain", {}))
             else:
-                probability = float(getattr(pred, "probability", 0.0))
+                probability_raw = float(getattr(pred, "probability", 0.0))
+                probability = float(getattr(pred, "display_probability", probability_raw))
                 label = getattr(pred, "label", "Unknown")
-                stability = float(getattr(pred, "decision_stability", 0.0))
+                stability_raw = float(getattr(pred, "decision_stability", 0.0))
+                stability = float(getattr(pred, "display_decision_stability", stability_raw))
                 gray_zone = bool(getattr(pred, "gray_zone", False))
-                decision_threshold = float(getattr(pred, "decision_threshold", 0.05))
+                decision_threshold_raw = float(getattr(pred, "decision_threshold", 0.05))
+                decision_threshold = float(getattr(pred, "display_threshold", 0.35))
                 clinician_explain = _normalize_clinician_explain(getattr(pred, "clinician_explain", {}))
 
             evidence_counts = clinician_explain.get("evidence_counts", {})
@@ -89,9 +95,13 @@ def _predict_batch_from_folder(folder_path: Path) -> list[dict]:
                     "record": base.name,
                     "label": label,
                     "probability": probability,
+                    "probability_raw": probability_raw,
                     "decision_stability": stability,
+                    "decision_stability_raw": stability_raw,
                     "gray_zone": gray_zone,
-                    "risk": "High" if probability >= decision_threshold else "Low",
+                    "decision_threshold": decision_threshold,
+                    "decision_threshold_raw": decision_threshold_raw,
+                    "risk": "High" if probability_raw >= decision_threshold_raw else "Low",
                     "recommendation_tier": recommendation_tier,
                     "evidence_strength_summary": evidence_strength_summary,
                     "morphology_model_mismatch": mismatch,
@@ -104,8 +114,12 @@ def _predict_batch_from_folder(folder_path: Path) -> list[dict]:
                     "record": base.name,
                     "label": "Inference Failed",
                     "probability": 0.0,
+                    "probability_raw": 0.0,
                     "decision_stability": 0.0,
+                    "decision_stability_raw": 0.0,
                     "gray_zone": False,
+                    "decision_threshold": 0.35,
+                    "decision_threshold_raw": 0.05,
                     "risk": "Unknown",
                     "recommendation_tier": "routine_clinical_correlation",
                     "evidence_strength_summary": "S0/M0/W0",

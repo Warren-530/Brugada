@@ -49,6 +49,7 @@ FEATURE_LAYER_BY_MODEL = {
 # Clinical safety override to preserve maximal recall in deployment.
 DECISION_THRESHOLD = 0.050
 UPPER_BOUND = 0.060
+DISPLAY_THRESHOLD = 0.350
 
 
 def _evidence_tier(score: float, segments: int, source: str) -> str:
@@ -121,6 +122,18 @@ def _build_clinician_explain(probability: float, is_detected: bool, in_gray_zone
     }
 
 
+def remap_probability_for_display(probability: float) -> float:
+    """Map raw model probability to report-aligned UI scale where 0.05 -> 0.35."""
+    p = float(np.clip(probability, 0.0, 1.0))
+    if p <= DECISION_THRESHOLD:
+        return float((DISPLAY_THRESHOLD / DECISION_THRESHOLD) * p)
+
+    # Linearly map (DECISION_THRESHOLD, 1.0] -> (DISPLAY_THRESHOLD, 1.0]
+    raw_span = 1.0 - DECISION_THRESHOLD
+    display_span = 1.0 - DISPLAY_THRESHOLD
+    return float(DISPLAY_THRESHOLD + ((p - DECISION_THRESHOLD) / raw_span) * display_span)
+
+
 def _extract_stat_features(sig_2d: np.ndarray) -> list[float]:
     stat_feat: list[float] = []
     for lead in range(12):
@@ -150,7 +163,7 @@ def _merge_segments(segments: list[tuple[int, int]], merge_gap: int = 2) -> list
             merged.append((start, end))
     return merged
 
-
+# extract expert features and highlights for V1-V3 leads based on J-point analysis
 def _extract_expert_features_and_highlights(
     sig_2d: np.ndarray,
     fs: float,
@@ -259,45 +272,65 @@ def extract_clinical_package(sig_2d: np.ndarray, fs: float) -> tuple[np.ndarray,
     return np.array(stat_feat + expert_feat), highlights, evidence
 
 
-def _build_explanation(probability: float, is_detected: bool, in_gray_zone: bool, evidence: list[dict]) -> str:
+def _build_explanation(
+    display_probability: float,
+    display_threshold: float,
+    is_detected: bool,
+    in_gray_zone: bool,
+    evidence: list[dict],
+) -> str:
     sorted_evidence = sorted(evidence, key=lambda x: x["score"], reverse=True)
     informative_leads = [
         e
         for e in sorted_evidence
         if e.get("segments", 0) > 0 and e.get("tier", "weak") in {"strong", "moderate"}
     ][:2]
-    weak_leads = [e for e in sorted_evidence if e.get("segments", 0) > 0 and e.get("tier", "weak") == "weak"]
+    weak_leads = [
+        e
+        for e in sorted_evidence
+        if e.get("segments", 0) > 0 and e.get("tier", "weak") == "weak"
+    ]
+    distance_pp = abs(display_probability - display_threshold) * 100.0
+
+    if in_gray_zone:
+        decision_line = (
+            f"Risk score {display_probability:.3f} is near the decision boundary ({display_threshold:.2f}, "
+            f"distance {distance_pp:.2f} pp)."
+        )
+    elif is_detected:
+        decision_line = (
+            f"Risk score {display_probability:.3f} is above the decision boundary {display_threshold:.2f} "
+            f"(distance {distance_pp:.2f} pp)."
+        )
+    else:
+        decision_line = (
+            f"Risk score {display_probability:.3f} is below the decision boundary {display_threshold:.2f} "
+            f"(distance {distance_pp:.2f} pp)."
+        )
 
     if informative_leads:
         lead_summary = ", ".join(
             [
-                f"{e['lead']} (J={e['j_height']:.3f}, slope={e['st_slope']:.4f}, curvature={e['curvature']:.4f})"
+                f"{e['lead']} ({e.get('tier', 'weak')} evidence, score {float(e.get('score', 0.0)):.3f})"
                 for e in informative_leads
             ]
         )
-        if is_detected or in_gray_zone:
-            morphology_note = f"Highlighted V1-V3 segments indicate morphology around J-point/ST regions, most notable in {lead_summary}."
-        else:
-            morphology_note = (
-                f"V1-V3 morphology windows were analyzed (most notable in {lead_summary}); "
-                "these features alone are not sufficient for a positive Brugada flag."
-            )
+        evidence_line = f"Key morphology evidence is concentrated in {lead_summary}."
     elif weak_leads:
-        morphology_note = (
-            "V1-V3 morphology windows were detected, but current handcrafted morphology strength is weak; "
-            "decision should rely on full model output with manual cardiology review."
-        )
+        evidence_line = "V1-V3 morphology was detected, but the extracted evidence strength is weak."
     else:
-        morphology_note = "No robust V1-V3 morphological segment was detected for explainable highlight in this record."
+        evidence_line = "No robust V1-V3 segment could be extracted for high-confidence morphology evidence."
 
-    if in_gray_zone:
-        triage_note = "Prediction is in the borderline-positive zone near threshold; cardiologist review is strongly recommended."
+    if is_detected and informative_leads:
+        action_line = "Recommended action: urgent cardiology review pathway."
     elif is_detected:
-        triage_note = "Model probability crosses the clinical decision threshold and is flagged as high-risk triage."
+        action_line = "Recommended action: urgent manual over-read, with repeat ECG and lead-quality check."
+    elif in_gray_zone:
+        action_line = "Recommended action: prioritize manual cardiology review due to boundary uncertainty."
     else:
-        triage_note = "Model probability is below the clinical decision threshold and is flagged as low-risk triage."
+        action_line = "Recommended action: routine clinical correlation and follow-up workflow."
 
-    return f"Brugada risk probability={probability:.4f}. {triage_note} {morphology_note} This AI output supports triage and does not replace physician diagnosis."
+    return f"{decision_line} {evidence_line} {action_line}"
 
 def load_all_models():
     """Load all .keras and .pkl files centrally"""
@@ -306,7 +339,6 @@ def load_all_models():
     print("Initializing Core Models...")
     custom_objs = {'LeadSpatialAttention': LeadSpatialAttention}
     
-    model_names = ['resnet', 'blstm', 'eegnet', 'cwt_cnn']
     model_files = {
         'resnet': os.path.join('models', 'extractor_resnet.keras'),
         'blstm': os.path.join('models', 'extractor_bilstm.keras'),
@@ -365,29 +397,6 @@ def load_all_models():
         raise
     
     print("[OK] All models initialized successfully!")
-
-    # Build intermediate feature models (32-d embeddings) instead of final 1-d classifiers.
-    MODELS['resnet_feat'] = keras.Model(
-        inputs=MODELS['resnet'].input,
-        outputs=MODELS['resnet'].get_layer(FEATURE_LAYER_BY_MODEL['resnet']).output,
-    )
-    MODELS['blstm_feat'] = keras.Model(
-        inputs=MODELS['blstm'].input,
-        outputs=MODELS['blstm'].get_layer(FEATURE_LAYER_BY_MODEL['blstm']).output,
-    )
-    MODELS['eegnet_feat'] = keras.Model(
-        inputs=MODELS['eegnet'].input,
-        outputs=MODELS['eegnet'].get_layer(FEATURE_LAYER_BY_MODEL['eegnet']).output,
-    )
-    MODELS['cwt_feat'] = keras.Model(
-        inputs=MODELS['cwt_cnn'].input,
-        outputs=MODELS['cwt_cnn'].get_layer(FEATURE_LAYER_BY_MODEL['cwt_cnn']).output,
-    )
-    
-    MODELS['scaler']   = joblib.load(os.path.join('models', 'brugada_scaler.pkl'))
-    MODELS['selector'] = joblib.load(os.path.join('models', 'brugada_selector.pkl'))
-    MODELS['meta']     = joblib.load(os.path.join('models', 'brugada_meta_learner.pkl'))
-    print("All models loaded successfully!")
 
 # =============================================================================
 # Feature Engineering Functions (Exactly matched with Notebook)
@@ -514,7 +523,24 @@ def predict_from_record(record_path: str) -> dict:
     # 3) Threshold distance (percentage points) for transparent boundary proximity.
     stability_percent = float(decision_margin * 100.0)
     class_support_percent = class_support * 100.0
-    explanation = _build_explanation(brugada_proba, is_detected, in_gray_zone, evidence)
+
+    # Report-aligned display metrics (UI only, does not affect operational logic).
+    display_probability = remap_probability_for_display(brugada_proba)
+    display_threshold = DISPLAY_THRESHOLD
+    display_gray_zone_upper = remap_probability_for_display(UPPER_BOUND)
+    display_margin = abs(display_probability - display_threshold)
+    display_max_margin = max(display_threshold, 1.0 - display_threshold)
+    display_margin_ratio = float(np.clip(display_margin / display_max_margin, 0.0, 1.0))
+    display_confidence = float((0.5 + 0.5 * display_margin_ratio) * 100.0)
+    display_stability = float(display_margin * 100.0)
+
+    explanation = _build_explanation(
+        display_probability=display_probability,
+        display_threshold=display_threshold,
+        is_detected=is_detected,
+        in_gray_zone=in_gray_zone,
+        evidence=evidence,
+    )
     clinician_explain = _build_clinician_explain(brugada_proba, is_detected, in_gray_zone, evidence)
     
     return {
@@ -526,6 +552,11 @@ def predict_from_record(record_path: str) -> dict:
         "decision_stability": float(stability_percent),
         "class_support": float(class_support_percent),
         "decision_threshold": float(DECISION_THRESHOLD),
+        "display_probability": float(display_probability),
+        "display_threshold": float(display_threshold),
+        "display_confidence": float(display_confidence),
+        "display_decision_stability": float(display_stability),
+        "display_gray_zone_upper": float(display_gray_zone_upper),
         "gray_zone": bool(in_gray_zone),
         "highlighted_segments": highlighted_segments,
         "lead_names": ["I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"],
