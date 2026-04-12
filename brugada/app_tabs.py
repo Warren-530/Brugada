@@ -579,25 +579,21 @@ def render_records_tab():
         st.error(f"Unable to read record counters: {count_exc}")
         counts = {"active": 0, "archived": 0, "deleted": 0}
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Active", str(counts.get("active", 0)))
-    c2.metric("Archived", str(counts.get("archived", 0)))
-    c3.metric("Deleted", str(counts.get("deleted", 0)))
+    with st.expander("Registry Overview", expanded=True):
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Active", str(counts.get("active", 0)))
+        c2.metric("Archived", str(counts.get("archived", 0)))
+        c3.metric("Deleted", str(counts.get("deleted", 0)))
 
-    status_display = st.radio("Status Filter", ["Active", "Archived", "Deleted", "All"], horizontal=True, key="records_status_filter")
     status_map = {
         "Active": "active",
         "Archived": "archived",
         "Deleted": "deleted",
         "All": "all",
     }
-    selected_status = status_map[status_display]
-
-    search_query = st.text_input(
-        "Search Records",
-        key="records_search_query",
-        placeholder="Record name, patient ID, or label",
-    )
+    status_display = str(st.session_state.get("records_status_filter", "Active"))
+    selected_status = status_map.get(status_display, "active")
+    search_query = str(st.session_state.get("records_search_query", ""))
 
     try:
         records = list_records(status=selected_status, search=search_query, limit=500)
@@ -616,6 +612,15 @@ def render_records_tab():
     records_df["risk_score_pct"] = (records_df["probability_display"] * 100.0).round(2)
     records_df["boundary_distance_pp"] = records_df["decision_stability_display"].round(2)
 
+    label_series = records_df["label"].fillna("").astype(str)
+    sick_mask = label_series.str.contains("Brugada Syndrome Detected", case=False, na=False)
+    gray_zone_mask = records_df["gray_zone"].fillna(False).astype(bool)
+
+    total_in_view = int(len(records_df))
+    sick_count = int(sick_mask.sum())
+    not_sick_count = int(total_in_view - sick_count)
+    gray_zone_count = int(gray_zone_mask.sum())
+
     editor_df = pd.DataFrame(
         {
             "select": False,
@@ -632,145 +637,218 @@ def render_records_tab():
         }
     )
 
-    edited_df = st.data_editor(
-        editor_df,
-        use_container_width=True,
-        hide_index=True,
-        key="records_table_editor",
-        column_config={
-            "select": st.column_config.CheckboxColumn("Select", help="Select one or more records for bulk actions."),
-            "record_uid": None,
-            "patient_id": st.column_config.TextColumn("patient_id", help="Editable patient identifier."),
-        },
-        disabled=[
-            "record_uid",
-            "timestamp_utc",
-            "record",
-            "label",
-            "risk_score_%",
-            "decision_stability_pp",
-            "recommendation_tier",
-            "status",
-            "evidence_summary",
-        ],
-    )
-
-    original_patient_by_uid = {
-        str(item["record_uid"]): str(item.get("patient_id", "") or "")
-        for item in records
-    }
-    patient_changes: list[tuple[str, str]] = []
-    for _, row in edited_df.iterrows():
-        row_uid = str(row["record_uid"])
-        edited_patient_id = str(row.get("patient_id", "") or "").strip()
-        if edited_patient_id != original_patient_by_uid.get(row_uid, ""):
-            patient_changes.append((row_uid, edited_patient_id))
-
-    selected_df = edited_df[edited_df["select"] == True]
-    selected_uids = [str(uid) for uid in selected_df["record_uid"].tolist()]
-    selected_items = [item for item in records if item["record_uid"] in selected_uids]
-
-    summary_selected_uid = None
-
-    e1, e2 = st.columns([1, 2])
-    with e1:
-        if patient_changes:
-            if st.button("Save Patient ID Edits", use_container_width=True, key="records_save_patient_id"):
-                updated_count = 0
-                for row_uid, edited_patient_id in patient_changes:
-                    if update_record_patient_id(row_uid, edited_patient_id):
-                        updated_count += 1
-                st.session_state.persistence_notice = f"Updated patient_id for {updated_count} record(s)."
-                st.rerun()
-    with e2:
-        if patient_changes:
-            st.caption("Unsaved patient_id edits detected. Click Save Patient ID Edits to persist changes.")
+    with st.expander("Patient Status Summary and Sick-Flag Reasons", expanded=True):
+        st.caption("Summary for records in the current filter and search view.")
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("Patients in View", str(total_in_view))
+        s2.metric("Sick (Brugada Detected)", str(sick_count))
+        s3.metric("Not Sick", str(not_sick_count))
+        s4.metric("Gray-Zone", str(gray_zone_count))
+        st.divider()
+        st.write("Why patients are flagged as sick")
+        if sick_count == 0:
+            st.markdown(
+                f"<div style='margin-bottom: 1rem; padding: 0.8rem; border-radius: 0.5rem; background-color: #e0f2fe; color: #075985; display: flex; align-items: center;'>{SVG_INFO} No records labeled as Brugada Syndrome Detected in the current view.</div>",
+                unsafe_allow_html=True,
+            )
         else:
-            st.caption("Tip: edit patient_id directly in the table to enable Save Patient ID Edits.")
+            sick_df = records_df[sick_mask].copy()
 
-    a1, a2, a3, a4 = st.columns(4)
+            tier_summary = (
+                sick_df.groupby("recommendation_tier", dropna=False)
+                .agg(
+                    patients=("record_uid", "count"),
+                    mean_risk_score_pct=("risk_score_pct", "mean"),
+                    mean_boundary_distance_pp=("boundary_distance_pp", "mean"),
+                )
+                .reset_index()
+                .sort_values(["patients", "mean_risk_score_pct"], ascending=[False, False])
+            )
+            tier_summary["recommendation_tier"] = tier_summary["recommendation_tier"].fillna("unknown")
+            tier_summary["mean_risk_score_pct"] = tier_summary["mean_risk_score_pct"].round(2)
+            tier_summary["mean_boundary_distance_pp"] = tier_summary["mean_boundary_distance_pp"].round(2)
 
-    with a1:
-        if st.button("Load Selected", key="records_load_selected", use_container_width=True):
-            if not selected_items:
-                st.warning("Select at least one record to load.")
-            elif len(selected_items) == 1:
-                selected_item = selected_items[0]
-                payload = get_record_payload(selected_item["record_uid"])
-                if payload is None:
-                    st.error("Unable to load selected record payload from local storage.")
-                else:
-                    st.session_state.records_loaded_result = payload
-                    st.session_state.last_ml_result = payload
-                    if "batch_results" in st.session_state:
-                        del st.session_state.batch_results
-                    st.session_state.persistence_notice = (
-                        f"Loaded saved record '{selected_item['record_name']}' into Clinical Report."
-                    )
-                    if st.session_state.chatbot_ready:
-                        st.session_state.chatbot.reset_conversation()
-                        st.session_state.conversation_history = []
+            evidence_summary = (
+                sick_df.groupby("evidence_summary", dropna=False)
+                .agg(patients=("record_uid", "count"))
+                .reset_index()
+                .sort_values("patients", ascending=False)
+                .head(5)
+            )
+            evidence_summary["evidence_summary"] = evidence_summary["evidence_summary"].fillna("S0/M0/W0")
+
+            top_recommendations = (
+                sick_df["recommendation_text"]
+                .fillna("Clinical correlation is recommended.")
+                .replace("", "Clinical correlation is recommended.")
+                .value_counts()
+                .head(3)
+            )
+
+            st.caption("Recommendation tiers and risk profile among sick patients.")
+            st.dataframe(tier_summary, use_container_width=True, hide_index=True)
+
+            rs1, rs2 = st.columns(2)
+            with rs1:
+                st.caption("Most common evidence strength patterns (S/M/W).")
+                st.dataframe(evidence_summary, use_container_width=True, hide_index=True)
+            with rs2:
+                st.caption("Top recommendation reasons returned by the model.")
+                for recommendation_text, n_patients in top_recommendations.items():
+                    st.write(f"- {int(n_patients)} patient(s): {recommendation_text}")
+    selected_items = []
+    summary_selected_uid = None
+    with st.expander("Records Table, Patient ID Edits, and Bulk Actions", expanded=True):
+        status_display = st.radio(
+            "Status Filter",
+            ["Active", "Archived", "Deleted", "All"],
+            horizontal=True,
+            key="records_status_filter",
+        )
+        search_query = st.text_input(
+            "Search Records",
+            key="records_search_query",
+            placeholder="Record name, patient ID, or label",
+        )
+
+        edited_df = st.data_editor(
+            editor_df,
+            use_container_width=True,
+            hide_index=True,
+            key="records_table_editor",
+            column_config={
+                "select": st.column_config.CheckboxColumn("Select", help="Select one or more records for bulk actions."),
+                "record_uid": None,
+                "patient_id": st.column_config.TextColumn("patient_id", help="Editable patient identifier."),
+            },
+            disabled=[
+                "record_uid",
+                "timestamp_utc",
+                "record",
+                "label",
+                "risk_score_%",
+                "decision_stability_pp",
+                "recommendation_tier",
+                "status",
+                "evidence_summary",
+            ],
+        )
+
+        original_patient_by_uid = {
+            str(item["record_uid"]): str(item.get("patient_id", "") or "")
+            for item in records
+        }
+        patient_changes: list[tuple[str, str]] = []
+        for _, row in edited_df.iterrows():
+            row_uid = str(row["record_uid"])
+            edited_patient_id = str(row.get("patient_id", "") or "").strip()
+            if edited_patient_id != original_patient_by_uid.get(row_uid, ""):
+                patient_changes.append((row_uid, edited_patient_id))
+
+        selected_df = edited_df[edited_df["select"] == True]
+        selected_uids = [str(uid) for uid in selected_df["record_uid"].tolist()]
+        selected_items = [item for item in records if item["record_uid"] in selected_uids]
+
+        e1, e2 = st.columns([1, 2])
+        with e1:
+            if patient_changes:
+                if st.button("Save Patient ID Edits", use_container_width=True, key="records_save_patient_id"):
+                    updated_count = 0
+                    for row_uid, edited_patient_id in patient_changes:
+                        if update_record_patient_id(row_uid, edited_patient_id):
+                            updated_count += 1
+                    st.session_state.persistence_notice = f"Updated patient_id for {updated_count} record(s)."
                     st.rerun()
+        with e2:
+            if patient_changes:
+                st.caption("Unsaved patient_id edits detected. Click Save Patient ID Edits to persist changes.")
             else:
-                batch_loaded = []
-                for item in selected_items:
-                    payload = get_record_payload(item["record_uid"])
-                    if not isinstance(payload, dict):
-                        continue
-                    batch_loaded.append(
-                        {
-                            "record": item["record_name"],
-                            "label": payload.get("label", item["label"]),
-                            "probability": float(payload.get("display_probability", item["probability_display"])),
-                            "decision_stability": float(
-                                payload.get("display_decision_stability", item["decision_stability_display"])
-                            ),
-                            "gray_zone": bool(payload.get("gray_zone", item["gray_zone"])),
-                            "recommendation_tier": payload.get("recommendation_tier", item["recommendation_tier"]),
-                            "evidence_strength_summary": item["evidence_summary"],
-                            "raw": payload,
-                        }
-                    )
+                st.caption("Tip: edit patient_id directly in the table to enable Save Patient ID Edits.")
 
-                if not batch_loaded:
-                    st.error("Unable to load any selected payloads from local storage.")
+        st.divider()
+        a1, a2, a3, a4 = st.columns(4)
+
+        with a1:
+            if st.button("Load Selected", key="records_load_selected", use_container_width=True):
+                if not selected_items:
+                    st.warning("Select at least one record to load.")
+                elif len(selected_items) == 1:
+                    selected_item = selected_items[0]
+                    payload = get_record_payload(selected_item["record_uid"])
+                    if payload is None:
+                        st.error("Unable to load selected record payload from local storage.")
+                    else:
+                        st.session_state.records_loaded_result = payload
+                        st.session_state.last_ml_result = payload
+                        if "batch_results" in st.session_state:
+                            del st.session_state.batch_results
+                        st.session_state.persistence_notice = (
+                            f"Loaded saved record '{selected_item['record_name']}' into Clinical Report."
+                        )
+                        if st.session_state.chatbot_ready:
+                            st.session_state.chatbot.reset_conversation()
+                            st.session_state.conversation_history = []
+                        st.rerun()
                 else:
-                    st.session_state.records_loaded_result = None
-                    st.session_state.last_ml_result = None
-                    st.session_state.batch_results = batch_loaded
-                    st.session_state.current_view = "Batch Summary"
-                    st.session_state.persistence_notice = f"Loaded {len(batch_loaded)} records into Clinical Report batch view."
-                    if st.session_state.chatbot_ready:
-                        st.session_state.chatbot.reset_conversation()
-                        st.session_state.conversation_history = []
+                    batch_loaded = []
+                    for item in selected_items:
+                        payload = get_record_payload(item["record_uid"])
+                        if not isinstance(payload, dict):
+                            continue
+                        batch_loaded.append(
+                            {
+                                "record": item["record_name"],
+                                "label": payload.get("label", item["label"]),
+                                "probability": float(payload.get("display_probability", item["probability_display"])),
+                                "decision_stability": float(
+                                    payload.get("display_decision_stability", item["decision_stability_display"])
+                                ),
+                                "gray_zone": bool(payload.get("gray_zone", item["gray_zone"])),
+                                "recommendation_tier": payload.get("recommendation_tier", item["recommendation_tier"]),
+                                "evidence_strength_summary": item["evidence_summary"],
+                                "raw": payload,
+                            }
+                        )
+
+                    if not batch_loaded:
+                        st.error("Unable to load any selected payloads from local storage.")
+                    else:
+                        st.session_state.records_loaded_result = None
+                        st.session_state.last_ml_result = None
+                        st.session_state.batch_results = batch_loaded
+                        st.session_state.current_view = "Batch Summary"
+                        st.session_state.persistence_notice = f"Loaded {len(batch_loaded)} records into Clinical Report batch view."
+                        if st.session_state.chatbot_ready:
+                            st.session_state.chatbot.reset_conversation()
+                            st.session_state.conversation_history = []
+                        st.rerun()
+
+        with a2:
+            if st.button("Archive Selected", key="records_archive_selected", use_container_width=True):
+                if not selected_uids:
+                    st.warning("Select at least one record to archive.")
+                else:
+                    changed = update_record_status_bulk(selected_uids, "archived")
+                    st.session_state.persistence_notice = f"Archived {changed} record(s)."
                     st.rerun()
 
-    with a2:
-        if st.button("Archive Selected", key="records_archive_selected", use_container_width=True):
-            if not selected_uids:
-                st.warning("Select at least one record to archive.")
-            else:
-                changed = update_record_status_bulk(selected_uids, "archived")
-                st.session_state.persistence_notice = f"Archived {changed} record(s)."
-                st.rerun()
+        with a3:
+            if st.button("Delete Selected", key="records_delete_selected", use_container_width=True):
+                if not selected_uids:
+                    st.warning("Select at least one record to delete.")
+                else:
+                    changed = update_record_status_bulk(selected_uids, "deleted")
+                    st.session_state.persistence_notice = f"Moved {changed} record(s) to deleted status."
+                    st.rerun()
 
-    with a3:
-        if st.button("Delete Selected", key="records_delete_selected", use_container_width=True):
-            if not selected_uids:
-                st.warning("Select at least one record to delete.")
-            else:
-                changed = update_record_status_bulk(selected_uids, "deleted")
-                st.session_state.persistence_notice = f"Moved {changed} record(s) to deleted status."
-                st.rerun()
-
-    with a4:
-        if st.button("Restore Selected", key="records_restore_selected", use_container_width=True):
-            if not selected_uids:
-                st.warning("Select at least one record to restore.")
-            else:
-                changed = update_record_status_bulk(selected_uids, "active")
-                st.session_state.persistence_notice = f"Restored {changed} record(s) to active status."
-                st.rerun()
+        with a4:
+            if st.button("Restore Selected", key="records_restore_selected", use_container_width=True):
+                if not selected_uids:
+                    st.warning("Select at least one record to restore.")
+                else:
+                    changed = update_record_status_bulk(selected_uids, "active")
+                    st.session_state.persistence_notice = f"Restored {changed} record(s) to active status."
+                    st.rerun()
 
     if selected_items:
         summary_options = {
