@@ -11,6 +11,7 @@ from brugada.storage.record_store import (
     update_record_status_bulk,
 )
 from brugada.ui.components import SVG_ERROR, SVG_INFO
+from brugada.ui.helpers import format_recommendation_tier
 
 
 def render_records_tab():
@@ -36,17 +37,17 @@ def render_records_tab():
         col1, col2, col3 = st.columns(3, gap="small")
         with col1:
             st.markdown(
-                f"<div style='border: 2px solid #e5e7eb; border-radius: 0.5rem; padding: 0.7rem; text-align: center; background-color: #ffffff;'><div style='color: #6b7280; font-size: 0.8rem; margin-bottom: 0.3rem;'>Active</div><div style='color: #1f2937; font-size: 1.5rem; font-weight: bold;'>{counts.get('active', 0)}</div></div>",
+                f"<div style='border: 2px solid #e5e7eb; border-radius: 0.5rem; padding: 0.7rem; text-align: center; background-color: #ffffff;'><div style='color: #6b7280; font-size: 1.1rem; font-weight: 600; margin-bottom: 0.3rem;'>Active</div><div style='color: #1f2937; font-size: 2.0rem; font-weight: bold;'>{counts.get('active', 0)}</div></div>",
                 unsafe_allow_html=True,
             )
         with col2:
             st.markdown(
-                f"<div style='border: 2px solid #e5e7eb; border-radius: 0.5rem; padding: 0.7rem; text-align: center; background-color: #ffffff;'><div style='color: #6b7280; font-size: 0.8rem; margin-bottom: 0.3rem;'>Archived</div><div style='color: #1f2937; font-size: 1.5rem; font-weight: bold;'>{counts.get('archived', 0)}</div></div>",
+                f"<div style='border: 2px solid #e5e7eb; border-radius: 0.5rem; padding: 0.7rem; text-align: center; background-color: #ffffff;'><div style='color: #6b7280; font-size: 1.1rem; font-weight: 600; margin-bottom: 0.3rem;'>Archived</div><div style='color: #1f2937; font-size: 2.0rem; font-weight: bold;'>{counts.get('archived', 0)}</div></div>",
                 unsafe_allow_html=True,
             )
         with col3:
             st.markdown(
-                f"<div style='border: 2px solid #e5e7eb; border-radius: 0.5rem; padding: 0.7rem; text-align: center; background-color: #ffffff;'><div style='color: #6b7280; font-size: 0.8rem; margin-bottom: 0.3rem;'>Deleted</div><div style='color: #1f2937; font-size: 1.5rem; font-weight: bold;'>{counts.get('deleted', 0)}</div></div>",
+                f"<div style='border: 2px solid #e5e7eb; border-radius: 0.5rem; padding: 0.7rem; text-align: center; background-color: #ffffff;'><div style='color: #6b7280; font-size: 1.1rem; font-weight: 600; margin-bottom: 0.3rem;'>Deleted</div><div style='color: #1f2937; font-size: 2.0rem; font-weight: bold;'>{counts.get('deleted', 0)}</div></div>",
                 unsafe_allow_html=True,
             )
         st.markdown("</div>", unsafe_allow_html=True)
@@ -121,7 +122,7 @@ def render_records_tab():
             "doctor_feedback_note": records_df["doctor_feedback_note"],
             "label": records_df["label"],
             "risk_score_%": records_df["risk_score_pct"],
-            "recommendation_tier": records_df["recommendation_tier"],
+            "recommendation_tier": records_df["recommendation_tier"].apply(format_recommendation_tier),
             "status": records_df["status"],
             "timestamp_utc": records_df["created_at"],
             "decision_stability_pp": records_df["boundary_distance_pp"],
@@ -246,6 +247,7 @@ def render_records_tab():
                     .sort_values(["patients", "mean_risk_score_pct"], ascending=[False, False])
                 )
                 tier_summary["recommendation_tier"] = tier_summary["recommendation_tier"].fillna("unknown")
+                tier_summary["recommendation_tier"] = tier_summary["recommendation_tier"].apply(format_recommendation_tier)
                 tier_summary["mean_risk_score_pct"] = tier_summary["mean_risk_score_pct"].round(2)
                 tier_summary["mean_boundary_distance_pp"] = tier_summary["mean_boundary_distance_pp"].round(2)
 
@@ -512,7 +514,7 @@ def render_records_tab():
         with st.expander("Selected Record Summary", expanded=False):
             st.write(f"Record UID: {selected_item['record_uid']}")
             st.write(f"Label: {selected_item['label']}")
-            st.write(f"Recommendation Tier: {selected_item['recommendation_tier']}")
+            st.write(f"Recommendation Tier: {format_recommendation_tier(selected_item['recommendation_tier'])}")
             st.write(f"Evidence Summary: {selected_item['evidence_summary']}")
             st.write(f"Recommendation: {selected_item['recommendation_text']}")
             st.write(f"Doctor Feedback: {selected_item.get('doctor_feedback', '') or 'not set'}")

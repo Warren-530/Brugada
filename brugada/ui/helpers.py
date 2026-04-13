@@ -4,6 +4,13 @@ import re
 import streamlit as st
 
 
+def format_recommendation_tier(tier: str) -> str:
+    """Replace underscores with spaces in recommendation tier names."""
+    if not tier or not isinstance(tier, str):
+        return "routine clinical correlation"
+    return tier.replace("_", " ")
+
+
 def render_metric_with_info(column, label: str, value: str, info_markdown: str, info_key: str) -> None:
     """Render metric as a custom card with an icon-only tooltip."""
     info_lines = []

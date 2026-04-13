@@ -19,7 +19,7 @@ from brugada.ui.components import (
     _recommendation_banner,
     _render_decision_margin_legend,
 )
-from brugada.ui.helpers import render_metric_with_info
+from brugada.ui.helpers import render_metric_with_info, format_recommendation_tier
 from brugada.file_utils import (
     _normalize_clinician_explain,
     _predict_batch_from_folder,
@@ -220,6 +220,7 @@ def render_clinical_report_tab(
         clinical_evidence = [item for item in clinical_evidence if isinstance(item, dict)]
 
         rec_tier = str(clinician_explain.get("recommendation_tier", "routine_clinical_correlation"))
+        rec_tier = format_recommendation_tier(rec_tier)
         rec_text = str(clinician_explain.get("recommendation_text", "Clinical correlation is recommended."))
         evidence_counts = clinician_explain.get("evidence_counts", {})
         next_actions = clinician_explain.get("next_actions", []) if isinstance(clinician_explain.get("next_actions", []), list) else []
