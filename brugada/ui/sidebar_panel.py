@@ -216,6 +216,7 @@ def render_patient_input_panel(clear_uploads_cb) -> dict:
                     clicked = st.button("->", key=f"nav_{stem_name}", use_container_width=True)
                     if clicked:
                         st.session_state.current_view = stem_name
+                        st.rerun()
         else:
             for stem in list(pairs.keys()):
                 card_svg = f"<span title='Valid pair ready for diagnosis' style='cursor: help;'>{SVG_FOLDER}</span>"

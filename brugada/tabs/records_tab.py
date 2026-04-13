@@ -205,22 +205,22 @@ def render_records_tab():
         s1, s2, s3, s4 = st.columns(4, gap="small")
         with s1:
             st.markdown(
-                f"<div style='border: 2px solid #e5e7eb; border-radius: 0.5rem; padding: 0.7rem; text-align: center; background-color: #ffffff;'><div style='color: #6b7280; font-size: 0.75rem; margin-bottom: 0.3rem;'>Patients in View</div><div style='color: #1f2937; font-size: 1.5rem; font-weight: bold;'>{total_in_view}</div></div>",
+                f"<div style='border: 2px solid #e5e7eb; border-radius: 0.5rem; padding: 0.7rem; text-align: center; background-color: #ffffff;'><div style='color: #6b7280; font-size: 1.0rem; font-weight: 600; margin-bottom: 0.3rem;'>Patients in View</div><div style='color: #1f2937; font-size: 2.0rem; font-weight: bold;'>{total_in_view}</div></div>",
                 unsafe_allow_html=True,
             )
         with s2:
             st.markdown(
-                f"<div style='border: 2px solid #e5e7eb; border-radius: 0.5rem; padding: 0.7rem; text-align: center; background-color: #ffffff;'><div style='color: #6b7280; font-size: 0.75rem; margin-bottom: 0.3rem;'>Sick (Brugada)</div><div style='color: #1f2937; font-size: 1.5rem; font-weight: bold;'>{sick_count}</div></div>",
+                f"<div style='border: 2px solid #e5e7eb; border-radius: 0.5rem; padding: 0.7rem; text-align: center; background-color: #ffffff;'><div style='color: #6b7280; font-size: 1.0rem; font-weight: 600; margin-bottom: 0.3rem;'>Sick (Brugada)</div><div style='color: #1f2937; font-size: 2.0rem; font-weight: bold;'>{sick_count}</div></div>",
                 unsafe_allow_html=True,
             )
         with s3:
             st.markdown(
-                f"<div style='border: 2px solid #e5e7eb; border-radius: 0.5rem; padding: 0.7rem; text-align: center; background-color: #ffffff;'><div style='color: #6b7280; font-size: 0.75rem; margin-bottom: 0.3rem;'>Not Sick</div><div style='color: #1f2937; font-size: 1.5rem; font-weight: bold;'>{not_sick_count}</div></div>",
+                f"<div style='border: 2px solid #e5e7eb; border-radius: 0.5rem; padding: 0.7rem; text-align: center; background-color: #ffffff;'><div style='color: #6b7280; font-size: 1.0rem; font-weight: 600; margin-bottom: 0.3rem;'>Not Sick</div><div style='color: #1f2937; font-size: 2.0rem; font-weight: bold;'>{not_sick_count}</div></div>",
                 unsafe_allow_html=True,
             )
         with s4:
             st.markdown(
-                f"<div style='border: 2px solid #e5e7eb; border-radius: 0.5rem; padding: 0.7rem; text-align: center; background-color: #ffffff;'><div style='color: #6b7280; font-size: 0.75rem; margin-bottom: 0.3rem;'>Gray-Zone</div><div style='color: #1f2937; font-size: 1.5rem; font-weight: bold;'>{gray_zone_count}</div></div>",
+                f"<div style='border: 2px solid #e5e7eb; border-radius: 0.5rem; padding: 0.7rem; text-align: center; background-color: #ffffff;'><div style='color: #6b7280; font-size: 1.0rem; font-weight: 600; margin-bottom: 0.3rem;'>Gray-Zone</div><div style='color: #1f2937; font-size: 2.0rem; font-weight: bold;'>{gray_zone_count}</div></div>",
                 unsafe_allow_html=True,
             )
         st.markdown("</div>", unsafe_allow_html=True)

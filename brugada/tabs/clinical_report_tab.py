@@ -148,7 +148,7 @@ def render_clinical_report_tab(
             if selected_view != current_view:
                 current_view = selected_view
                 st.session_state.current_view = current_view
-            st.caption("Choose a specific record to review details one by one.")
+            st.caption("Choose a specific record from the sidebar arrow keys or dropdown selector.")
 
     single_result_to_show = None
     has_results = False
@@ -348,6 +348,8 @@ def render_clinical_report_tab(
                 display_df = similar_df.copy()
                 display_df["risk_score_%"] = (display_df["probability_display"] * 100.0).round(2)
                 display_df["similarity_%"] = display_df["similarity_score"].round(2)
+                # Format recommendation_tier by removing underscores
+                display_df["recommendation_tier"] = display_df["recommendation_tier"].apply(format_recommendation_tier)
                 show_cols = [
                     "record_name",
                     "patient_id",
@@ -534,7 +536,10 @@ def render_clinical_report_tab(
             hidden_cols = [
                 c for c in ["raw", "probability_raw", "decision_stability_raw", "decision_threshold_raw"] if c in df.columns
             ]
-            display_df = df.drop(columns=hidden_cols) if hidden_cols else df
+            display_df = df.drop(columns=hidden_cols) if hidden_cols else df.copy()
+            # Format recommendation_tier to remove underscores
+            if "recommendation_tier" in display_df.columns:
+                display_df["recommendation_tier"] = display_df["recommendation_tier"].apply(format_recommendation_tier)
             st.dataframe(display_df, use_container_width=True)
 
             st.subheader("Urgent Review Queue")
@@ -559,6 +564,8 @@ def render_clinical_report_tab(
                     unsafe_allow_html=True,
                 )
             else:
-                st.dataframe(gray_queue[["record", "probability", "decision_stability", "label", "recommendation_tier"]], use_container_width=True)
+                display_gray_queue = gray_queue[["record", "probability", "decision_stability", "label", "recommendation_tier"]].copy()
+                display_gray_queue["recommendation_tier"] = display_gray_queue["recommendation_tier"].apply(format_recommendation_tier)
+                st.dataframe(display_gray_queue, use_container_width=True)
 
     return single_result_to_show, current_view
